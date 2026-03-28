@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+:root {
+  --background: #07111f;
+  --foreground: #f8fafc;
+  --surface: rgba(15, 23, 42, 0.82);
+  --surface-strong: rgba(8, 15, 29, 0.94);
+  --border: rgba(148, 163, 184, 0.16);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-manrope);
+  --font-display: var(--font-sora);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top, rgba(16, 185, 129, 0.12), transparent 24%),
+    linear-gradient(180deg, #08121f, #050c16 60%, #030913);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-manrope), sans-serif;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.12), transparent 20%),
+    radial-gradient(circle at bottom right, rgba(59, 130, 246, 0.11), transparent 22%),
+    linear-gradient(180deg, rgba(2, 6, 23, 1), rgba(5, 12, 22, 1));
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background: rgba(16, 185, 129, 0.3);
+  color: white;
+}
+
+.font-display {
+  font-family: var(--font-sora), sans-serif;
+}
+
+.eyebrow {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+}
+
+.panel {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(8, 15, 29, 0.92)),
+    var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2rem;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 30px 120px rgba(3, 9, 18, 0.55);
+  backdrop-filter: blur(20px);
+}
+
+.metric-glow {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 42px rgba(5, 12, 22, 0.46);
+}
+
+.subtle-grid {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 52px 52px;
+}
+
+.animate-rise {
+  animation: rise 0.6s ease both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
