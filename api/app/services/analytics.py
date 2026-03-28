@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.models.entities import Campaign, Click, Conversion, Match, Product
+from app.models.entities import AgentResponse, Campaign, Click, Conversion, IntentSignal, Match, Product
 from app.services.endpoints import build_agent_endpoints
 
 
@@ -32,20 +32,34 @@ def compute_campaign_overview(db: Session, campaign: Campaign) -> dict:
     matches = db.scalars(
         select(Match).where(Match.campaign_id == campaign.id).options(joinedload(Match.product))
     ).all()
+    listener_signals = db.scalars(
+        select(IntentSignal).where(IntentSignal.campaign_id == campaign.id)
+    ).all()
+    listener_responses = db.scalars(
+        select(AgentResponse).where(AgentResponse.campaign_id == campaign.id)
+    ).all()
     conversions = db.scalars(
         select(Conversion)
         .where(Conversion.campaign_id == campaign.id)
         .options(joinedload(Conversion.product))
     ).all()
 
-    compute_spent = round(sum(match.compute_cost for match in matches), 2)
+    compute_spent = round(
+        sum(match.compute_cost for match in matches)
+        + sum(signal.scoring_cost for signal in listener_signals)
+        + sum(response.generation_cost for response in listener_responses),
+        2,
+    )
     revenue = round(sum(conversion.order_value for conversion in conversions), 2)
     return_on_compute = round(revenue / compute_spent, 2) if compute_spent else 0.0
     budget_utilization = round(
         min(compute_spent / campaign.budget_monthly, 1.25) if campaign.budget_monthly else 0.0,
         4,
     )
-    projected_monthly_spend = round(project_monthly_spend(matches), 2)
+    cost_events = [(match.created_at, match.compute_cost) for match in matches]
+    cost_events.extend((signal.created_at, signal.scoring_cost) for signal in listener_signals)
+    cost_events.extend((response.created_at, response.generation_cost) for response in listener_responses)
+    projected_monthly_spend = round(project_monthly_spend(cost_events), 2)
     alerts = []
     if budget_utilization >= 1:
         alerts.append("Budget exhausted. Active ranking boost will stop unless you increase the cap.")
@@ -54,7 +68,12 @@ def compute_campaign_overview(db: Session, campaign: Campaign) -> dict:
     elif budget_utilization >= 0.8:
         alerts.append("80% of budget consumed. Watch projected end-of-month spend.")
 
-    compute_series, revenue_series = sparkline_series(matches, conversions)
+    compute_series, revenue_series = sparkline_series(
+        matches,
+        listener_signals,
+        listener_responses,
+        conversions,
+    )
 
     campaign.budget_spent = compute_spent
     db.commit()
@@ -88,31 +107,36 @@ def compute_campaign_overview(db: Session, campaign: Campaign) -> dict:
     }
 
 
-def project_monthly_spend(matches: list[Match]) -> float:
-    if not matches:
+def project_monthly_spend(cost_events: list[tuple[datetime, float]]) -> float:
+    if not cost_events:
         return 0.0
     now = datetime.now(timezone.utc)
-    recent = [
-        match.compute_cost
-        for match in matches
-        if ensure_utc(match.created_at) >= now - timedelta(days=7)
-    ]
+    recent = [cost for created_at, cost in cost_events if ensure_utc(created_at) >= now - timedelta(days=7)]
     if not recent:
-        recent = [match.compute_cost for match in matches]
+        recent = [cost for _, cost in cost_events]
     average_daily_spend = sum(recent) / max(
-        len({ensure_utc(match.created_at).date() for match in matches}),
+        len({ensure_utc(created_at).date() for created_at, _ in cost_events}),
         1,
     )
     _, days_in_month = calendar.monthrange(now.year, now.month)
     return average_daily_spend * days_in_month
 
 
-def sparkline_series(matches: list[Match], conversions: list[Conversion]) -> tuple[list[float], list[float]]:
+def sparkline_series(
+    matches: list[Match],
+    listener_signals: list[IntentSignal],
+    listener_responses: list[AgentResponse],
+    conversions: list[Conversion],
+) -> tuple[list[float], list[float]]:
     now = datetime.now(timezone.utc).date()
     compute_map = defaultdict(float)
     revenue_map = defaultdict(float)
     for match in matches:
         compute_map[ensure_utc(match.created_at).date()] += match.compute_cost
+    for signal in listener_signals:
+        compute_map[ensure_utc(signal.created_at).date()] += signal.scoring_cost
+    for response in listener_responses:
+        compute_map[ensure_utc(response.created_at).date()] += response.generation_cost
     for conversion in conversions:
         revenue_map[ensure_utc(conversion.created_at).date()] += conversion.order_value
 
@@ -136,12 +160,18 @@ def build_metric_series(db: Session, campaign_id: str, period: str) -> list[dict
     start_date = now - timedelta(days=days - 1)
 
     matches = db.scalars(select(Match).where(Match.campaign_id == campaign_id)).all()
+    listener_signals = db.scalars(select(IntentSignal).where(IntentSignal.campaign_id == campaign_id)).all()
+    listener_responses = db.scalars(select(AgentResponse).where(AgentResponse.campaign_id == campaign_id)).all()
     conversions = db.scalars(select(Conversion).where(Conversion.campaign_id == campaign_id)).all()
     compute_map = defaultdict(float)
     revenue_map = defaultdict(float)
     conversion_map = defaultdict(int)
     for match in matches:
         compute_map[ensure_utc(match.created_at).date()] += match.compute_cost
+    for signal in listener_signals:
+        compute_map[ensure_utc(signal.created_at).date()] += signal.scoring_cost
+    for response in listener_responses:
+        compute_map[ensure_utc(response.created_at).date()] += response.generation_cost
     for conversion in conversions:
         conversion_date = ensure_utc(conversion.created_at).date()
         revenue_map[conversion_date] += conversion.order_value
@@ -163,6 +193,12 @@ def build_metric_series(db: Session, campaign_id: str, period: str) -> list[dict
 
 
 def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
+    listener_signals = db.scalars(
+        select(IntentSignal).where(IntentSignal.campaign_id == campaign.id)
+    ).all()
+    listener_responses = db.scalars(
+        select(AgentResponse).where(AgentResponse.campaign_id == campaign.id)
+    ).all()
     products = db.scalars(
         select(Product)
         .where(Product.merchant_id == campaign.merchant_id)
@@ -175,9 +211,15 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
     rows = []
     for product in products:
         matches = [match for match in product.matches if match.campaign_id == campaign.id]
+        product_signals = [signal for signal in listener_signals if signal.product_id == product.id]
+        product_responses = [response for response in listener_responses if response.product_id == product.id]
         clicks = [click for click in product.clicks if click.campaign_id == campaign.id]
         conversions = [conversion for conversion in product.conversions if conversion.campaign_id == campaign.id]
-        compute_spent = sum(match.compute_cost for match in matches)
+        compute_spent = (
+            sum(match.compute_cost for match in matches)
+            + sum(signal.scoring_cost for signal in product_signals)
+            + sum(response.generation_cost for response in product_responses)
+        )
         revenue = sum(conversion.order_value for conversion in conversions)
         roc = round(revenue / compute_spent, 2) if compute_spent else 0.0
         status = "stable"
@@ -192,7 +234,7 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
                 "price": product.price,
                 "currency": product.currency,
                 "image": product.images[0] if product.images else None,
-                "matches": len(matches),
+                "matches": len(matches) + len(product_signals),
                 "clicks": len(clicks),
                 "conversions": len(conversions),
                 "revenue": round(revenue, 2),
@@ -218,12 +260,16 @@ def build_activity_feed(
     clicks = db.scalars(
         select(Click)
         .where(Click.campaign_id == campaign_id)
-        .options(joinedload(Click.product), joinedload(Click.match).joinedload(Match.query))
+        .options(
+            joinedload(Click.product),
+            joinedload(Click.match).joinedload(Match.query),
+            joinedload(Click.response),
+        )
     ).all()
     conversions = db.scalars(
         select(Conversion)
         .where(Conversion.campaign_id == campaign_id)
-        .options(joinedload(Conversion.product))
+        .options(joinedload(Conversion.product), joinedload(Conversion.click).joinedload(Click.response))
     ).all()
 
     events = []
@@ -245,14 +291,18 @@ def build_activity_feed(
 
     if event_type in ("all", "click"):
         for click in clicks:
-            agent_name = click.match.query.agent_source if click.match and click.match.query else "an agent"
+            if click.source == "intent_listener" and click.response:
+                detail = f"Viewed via {click.surface or 'social'} reply from Ever's intent listener"
+            else:
+                agent_name = click.match.query.agent_source if click.match and click.match.query else "an agent"
+                detail = f"Surfaced via {agent_name} on {click.channel.upper()}"
             events.append(
                 {
                     "id": click.id,
                     "event_type": "click",
                     "channel": click.channel,
                     "title": f"Click: consumer viewed {click.product.name}",
-                    "detail": f"Surfaced via {agent_name} on {click.channel.upper()}",
+                    "detail": detail,
                     "timestamp": click.created_at.isoformat(),
                     "relative_time": relative_time(click.created_at),
                     "product_id": click.product_id,
@@ -261,13 +311,20 @@ def build_activity_feed(
 
     if event_type in ("all", "conversion"):
         for conversion in conversions:
+            if conversion.click and conversion.click.source == "intent_listener":
+                detail = (
+                    f"${conversion.order_value:,.2f} attributed revenue from "
+                    f"{(conversion.click.surface or 'social').title()} outreach"
+                )
+            else:
+                detail = f"${conversion.order_value:,.2f} attributed revenue on {conversion.channel.upper()}"
             events.append(
                 {
                     "id": conversion.id,
                     "event_type": "conversion",
                     "channel": conversion.channel,
                     "title": f"Conversion: {conversion.product.name} purchased",
-                    "detail": f"${conversion.order_value:,.2f} attributed revenue on {conversion.channel.upper()}",
+                    "detail": detail,
                     "timestamp": conversion.created_at.isoformat(),
                     "relative_time": relative_time(conversion.created_at),
                     "product_id": conversion.product_id,

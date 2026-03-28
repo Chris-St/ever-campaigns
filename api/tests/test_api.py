@@ -55,6 +55,59 @@ def test_full_flow() -> None:
     assert overview.json()["revenue"] > 0
     assert overview.json()["agent_endpoints"]["mcp"]["public_url"].endswith(f"/{merchant_slug}")
 
+    listener_status = client.get(f"/campaigns/{campaign_id}/listener/status", headers=headers)
+    assert listener_status.status_code == 200
+    assert listener_status.json()["status"] == "stopped"
+    assert listener_status.json()["surfaces_active"] >= 2
+
+    listener_payload = listener_status.json()
+    listener_payload["brand_voice_profile"]["tone"] = "Helpful, premium, and direct"
+    listener_payload["config"]["review_mode"] = "auto"
+    updated_listener = client.put(
+        f"/campaigns/{campaign_id}/listener/config",
+        json={
+            "brand_voice_profile": listener_payload["brand_voice_profile"],
+            "config": listener_payload["config"],
+        },
+        headers=headers,
+    )
+    assert updated_listener.status_code == 200
+    assert updated_listener.json()["config"]["review_mode"] == "auto"
+
+    started_listener = client.post(f"/campaigns/{campaign_id}/listener/start", headers=headers)
+    assert started_listener.status_code == 200
+    assert started_listener.json()["status"] == "running"
+    assert started_listener.json()["approved_response_count"] > 0
+
+    review_queue = client.get(f"/campaigns/{campaign_id}/review", headers=headers)
+    assert review_queue.status_code == 200
+    assert len(review_queue.json()) >= 1
+    review_item = review_queue.json()[0]
+
+    edited_review = client.post(
+        f"/campaigns/{campaign_id}/review/{review_item['response_id']}/edit",
+        json={"response_text": f"{review_item['response_text']} Edited."},
+        headers=headers,
+    )
+    assert edited_review.status_code == 200
+    assert edited_review.json()["response_text"].endswith("Edited.")
+
+    approved_review = client.post(
+        f"/campaigns/{campaign_id}/review/{review_item['response_id']}/approve",
+        headers=headers,
+    )
+    assert approved_review.status_code == 200
+    assert approved_review.json()["review_status"] == "approved"
+
+    listener_analytics = client.get(
+        f"/campaigns/{campaign_id}/listener/analytics?period=30d",
+        headers=headers,
+    )
+    assert listener_analytics.status_code == 200
+    assert listener_analytics.json()["signals_detected"] > 0
+    assert listener_analytics.json()["responses_sent"] > 0
+    assert len(listener_analytics.json()["top_surfaces"]) >= 1
+
     endpoints = client.get(f"/campaigns/{campaign_id}/endpoints", headers=headers)
     assert endpoints.status_code == 200
     assert endpoints.json()["merchant_slug"] == merchant_slug
@@ -97,3 +150,7 @@ def test_full_flow() -> None:
     ucp_feed = client.get(f"/feeds/{merchant_id}/ucp.json")
     assert ucp_feed.status_code == 200
     assert len(ucp_feed.json()["products"]) >= 4
+
+    stopped_listener = client.post(f"/campaigns/{campaign_id}/listener/stop", headers=headers)
+    assert stopped_listener.status_code == 200
+    assert stopped_listener.json()["status"] == "stopped"

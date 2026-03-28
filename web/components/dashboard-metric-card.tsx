@@ -6,7 +6,7 @@ import { Sparkline } from "@/components/sparkline";
 interface DashboardMetricCardProps {
   label: string;
   value: number;
-  format?: "currency" | "compact" | "number" | "multiplier";
+  format?: "currency" | "compact" | "number" | "multiplier" | "percent";
   currency?: string;
   accentClass: string;
   caption: string;

@@ -116,6 +116,151 @@ class AgentEndpoints(BaseModel):
     ucp: AgentChannelStatus
 
 
+class BrandVoiceProfile(BaseModel):
+    brand_name: str
+    story: str
+    values: list[str] = Field(default_factory=list)
+    tone: str
+    target_customer: str | None = None
+    dos: list[str] = Field(default_factory=list)
+    donts: list[str] = Field(default_factory=list)
+    sample_responses: dict[str, str] = Field(default_factory=dict)
+
+
+class ListenerThresholds(BaseModel):
+    composite_min: int = 70
+    receptivity_min: int = 60
+
+
+class ListenerSafeguards(BaseModel):
+    max_responses_per_surface_per_day: int = 10
+    max_responses_per_day: int = 50
+    max_thread_replies: int = 2
+    minimum_minutes_between_surface_responses: int = 5
+    minimum_post_age_minutes: int = 10
+    one_response_per_author_per_day: bool = True
+    always_disclose_ai: bool = True
+
+
+class ListenerSurfaceConfig(BaseModel):
+    type: Literal["reddit", "twitter"]
+    enabled: bool = True
+    subreddits: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)
+    poll_interval_seconds: int = 180
+
+
+class ListenerConfig(BaseModel):
+    aggressiveness: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    review_mode: Literal["manual", "auto"] = "manual"
+    auto_post_after_approvals: int = 50
+    thresholds: ListenerThresholds = Field(default_factory=ListenerThresholds)
+    safeguards: ListenerSafeguards = Field(default_factory=ListenerSafeguards)
+    surfaces: list[ListenerSurfaceConfig] = Field(default_factory=list)
+
+
+class ListenerStatus(BaseModel):
+    campaign_id: str
+    status: Literal["running", "stopped"]
+    surfaces_active: int
+    signals_detected_today: int
+    responses_pending_review: int
+    compute_spent_today: float
+    approved_response_count: int
+    last_polled_at: str | None = None
+    brand_voice_profile: BrandVoiceProfile
+    config: ListenerConfig
+
+
+class ListenerConfigUpdateRequest(BaseModel):
+    brand_voice_profile: BrandVoiceProfile | None = None
+    config: ListenerConfig | None = None
+
+
+class ReviewQueueItem(BaseModel):
+    response_id: str
+    signal_id: str
+    surface: str
+    subreddit_or_channel: str | None = None
+    content_text: str
+    context_text: str | None = None
+    content_url: str | None = None
+    product_id: str | None = None
+    product_name: str | None = None
+    intent_score: dict[str, Any] = Field(default_factory=dict)
+    response_text: str
+    referral_url: str | None = None
+    confidence: float
+    needs_review: bool
+    review_status: str
+    created_at: str
+    relative_time: str
+
+
+class ReviewResponseEditRequest(BaseModel):
+    response_text: str
+
+
+class ListenerTopSurface(BaseModel):
+    surface: str
+    signals_detected: int
+    responses_sent: int
+    clicks: int
+    conversions: int
+    revenue: float
+    compute_cost: float
+    roc: float
+
+
+class ListenerTopProduct(BaseModel):
+    product_id: str | None = None
+    product_name: str | None = None
+    surface: str | None = None
+    responses_sent: int
+    clicks: int
+    conversions: int
+    revenue: float
+    compute_cost: float
+    roc: float
+
+
+class ListenerCountBreakdown(BaseModel):
+    label: str
+    count: int
+
+
+class ListenerAnalyticsPoint(BaseModel):
+    date: str
+    signals_detected: int
+    responses_sent: int
+    clicks: int
+    conversions: int
+    revenue: float
+    compute_cost: float
+
+
+class ListenerAnalytics(BaseModel):
+    period: str
+    signals_detected: int
+    responses_sent: int
+    responses_pending_review: int
+    approval_rate: float
+    response_rate: float
+    clicks: int
+    click_through_rate: float
+    conversions: int
+    conversion_rate: float
+    revenue: float
+    compute_cost: float
+    return_on_compute: float
+    top_surfaces: list[ListenerTopSurface] = Field(default_factory=list)
+    top_products: list[ListenerTopProduct] = Field(default_factory=list)
+    top_subreddits: list[ListenerCountBreakdown] = Field(default_factory=list)
+    intent_score_distribution: list[ListenerCountBreakdown] = Field(default_factory=list)
+    daily: list[ListenerAnalyticsPoint] = Field(default_factory=list)
+
+
 class CampaignOverview(BaseModel):
     id: str
     merchant_id: str

@@ -34,9 +34,18 @@ def ensure_runtime_schema() -> None:
 
     alter_statements = {
         ("merchants", "merchant_slug"): "ALTER TABLE merchants ADD COLUMN merchant_slug VARCHAR",
+        ("campaigns", "brand_voice_profile"): "ALTER TABLE campaigns ADD COLUMN brand_voice_profile JSON",
+        ("campaigns", "listener_config"): "ALTER TABLE campaigns ADD COLUMN listener_config JSON",
+        ("campaigns", "listener_status"): "ALTER TABLE campaigns ADD COLUMN listener_status VARCHAR DEFAULT 'stopped'",
+        ("campaigns", "listener_started_at"): "ALTER TABLE campaigns ADD COLUMN listener_started_at DATETIME",
+        ("campaigns", "listener_last_polled_at"): "ALTER TABLE campaigns ADD COLUMN listener_last_polled_at DATETIME",
+        ("campaigns", "approved_response_count"): "ALTER TABLE campaigns ADD COLUMN approved_response_count INTEGER DEFAULT 0",
         ("queries", "channel"): "ALTER TABLE queries ADD COLUMN channel VARCHAR DEFAULT 'mcp'",
         ("matches", "channel"): "ALTER TABLE matches ADD COLUMN channel VARCHAR DEFAULT 'mcp'",
         ("clicks", "channel"): "ALTER TABLE clicks ADD COLUMN channel VARCHAR DEFAULT 'mcp'",
+        ("clicks", "source"): "ALTER TABLE clicks ADD COLUMN source VARCHAR DEFAULT 'mcp'",
+        ("clicks", "surface"): "ALTER TABLE clicks ADD COLUMN surface VARCHAR",
+        ("clicks", "response_id"): "ALTER TABLE clicks ADD COLUMN response_id VARCHAR",
         ("conversions", "channel"): "ALTER TABLE conversions ADD COLUMN channel VARCHAR DEFAULT 'mcp'",
     }
 
@@ -50,6 +59,23 @@ def ensure_runtime_schema() -> None:
                 connection.execute(
                     text(f"UPDATE {table_name} SET channel = 'mcp' WHERE channel IS NULL")
                 )
+
+        if "clicks" in table_columns or "clicks" in inspector.get_table_names():
+            connection.execute(text("UPDATE clicks SET source = 'mcp' WHERE source IS NULL"))
+
+        if "campaigns" in table_columns or "campaigns" in inspector.get_table_names():
+            connection.execute(
+                text("UPDATE campaigns SET listener_status = 'stopped' WHERE listener_status IS NULL")
+            )
+            connection.execute(
+                text("UPDATE campaigns SET approved_response_count = 0 WHERE approved_response_count IS NULL")
+            )
+            connection.execute(
+                text("UPDATE campaigns SET brand_voice_profile = '{}' WHERE brand_voice_profile IS NULL")
+            )
+            connection.execute(
+                text("UPDATE campaigns SET listener_config = '{}' WHERE listener_config IS NULL")
+            )
 
     backfill_merchant_slugs()
 

@@ -25,6 +25,7 @@ export function AppHeader({ title, subtitle }: AppHeaderProps) {
             <nav className="hidden items-center gap-2 rounded-full border border-white/8 bg-white/4 p-1 md:flex">
               {[
                 { href: "/dashboard", label: "Dashboard" },
+                { href: "/review", label: "Review" },
                 { href: "/settings", label: "Settings" },
               ].map((item) => {
                 const active = pathname?.startsWith(item.href);

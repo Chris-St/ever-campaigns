@@ -21,6 +21,8 @@ import { fallbackImageSrc } from "@/lib/image";
 import type {
   ActivityEntry,
   CampaignOverview,
+  ListenerAnalytics,
+  ListenerStatus,
   ProductPerformanceRow,
   TimeSeriesPoint,
 } from "@/lib/types";
@@ -49,6 +51,8 @@ export function DashboardClient() {
   const [metrics, setMetrics] = useState<TimeSeriesPoint[]>([]);
   const [products, setProducts] = useState<ProductPerformanceRow[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [listenerStatus, setListenerStatus] = useState<ListenerStatus | null>(null);
+  const [listenerAnalytics, setListenerAnalytics] = useState<ListenerAnalytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [endpointsOpen, setEndpointsOpen] = useState(false);
@@ -85,7 +89,8 @@ export function DashboardClient() {
     async function loadDashboardData() {
       setIsRefreshing(true);
       try {
-        const [nextOverview, nextMetrics, nextProducts, nextActivity] = await Promise.all([
+        const [nextOverview, nextMetrics, nextProducts, nextActivity, nextListenerStatus, nextListenerAnalytics] =
+          await Promise.all([
           apiRequest<CampaignOverview>(`/campaigns/${campaignId}`, {
             method: "GET",
             token,
@@ -105,6 +110,17 @@ export function DashboardClient() {
               token,
             },
           ),
+          apiRequest<ListenerStatus>(`/campaigns/${campaignId}/listener/status`, {
+            method: "GET",
+            token,
+          }),
+          apiRequest<ListenerAnalytics>(
+            `/campaigns/${campaignId}/listener/analytics?period=${period}`,
+            {
+              method: "GET",
+              token,
+            },
+          ),
         ]);
 
         if (cancelled) {
@@ -115,6 +131,8 @@ export function DashboardClient() {
         setMetrics(nextMetrics);
         setProducts(nextProducts);
         setActivity(nextActivity);
+        setListenerStatus(nextListenerStatus);
+        setListenerAnalytics(nextListenerAnalytics);
         setError(null);
       } catch (caughtError) {
         if (!cancelled) {
@@ -154,6 +172,18 @@ export function DashboardClient() {
   const rocSparkline = metrics.slice(-14).map((point) =>
     point.compute_spend > 0 ? point.revenue / point.compute_spend : 0,
   );
+  const listenerSignalSparkline =
+    listenerAnalytics?.daily.slice(-14).map((point) => point.signals_detected) ?? [];
+  const listenerResponseSparkline =
+    listenerAnalytics?.daily.slice(-14).map((point) => point.responses_sent) ?? [];
+  const listenerCtrSparkline =
+    listenerAnalytics?.daily.slice(-14).map((point) =>
+      point.responses_sent > 0 ? point.clicks / point.responses_sent : 0,
+    ) ?? [];
+  const listenerRocSparkline =
+    listenerAnalytics?.daily.slice(-14).map((point) =>
+      point.compute_cost > 0 ? point.revenue / point.compute_cost : 0,
+    ) ?? [];
 
   const sortedProducts = [...products].sort((left, right) => {
     const leftValue = left[sortKey];
@@ -197,6 +227,36 @@ export function DashboardClient() {
     window.setTimeout(() => {
       setCopiedField((current) => (current === label ? null : current));
     }, 1600);
+  }
+
+  async function handleStartListener() {
+    if (!token || !campaignId) {
+      return;
+    }
+    setIsRefreshing(true);
+    try {
+      const [nextListenerStatus, nextListenerAnalytics] = await Promise.all([
+        apiRequest<ListenerStatus>(`/campaigns/${campaignId}/listener/start`, {
+          method: "POST",
+          token,
+        }),
+        apiRequest<ListenerAnalytics>(`/campaigns/${campaignId}/listener/analytics?period=${period}`, {
+          method: "GET",
+          token,
+        }),
+      ]);
+      setListenerStatus(nextListenerStatus);
+      setListenerAnalytics(nextListenerAnalytics);
+      setError(null);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to start the intent listener.",
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   const endpoints = overview.agent_endpoints;
@@ -249,6 +309,201 @@ export function DashboardClient() {
             sparkline={rocSparkline}
           />
         </div>
+
+        {listenerStatus && listenerAnalytics ? (
+          <section className="panel p-6">
+            <div className="flex flex-col gap-4 border-b border-white/8 pb-5 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="eyebrow">Intent listener</p>
+                <h2 className="font-display text-2xl text-white">
+                  Human-web monitoring and response engine
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">
+                  Reddit and X signals flow through scoring, response generation, human review,
+                  and tracked referrals so RoC stays visible outside MCP traffic too.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <span
+                  className={`rounded-full px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] ${
+                    listenerStatus.status === "running"
+                      ? "border border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
+                      : "border border-white/10 bg-white/5 text-slate-300"
+                  }`}
+                >
+                  {listenerStatus.status === "running" ? "Running" : "Stopped"}
+                </span>
+                {listenerStatus.status !== "running" ? (
+                  <button
+                    onClick={() => void handleStartListener()}
+                    className="rounded-full bg-emerald-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300"
+                  >
+                    Start listener
+                  </button>
+                ) : null}
+                <Link
+                  href="/review"
+                  className="rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10"
+                >
+                  Open review queue
+                </Link>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-4 xl:grid-cols-4">
+              <DashboardMetricCard
+                label="Intents Detected"
+                value={listenerAnalytics.signals_detected}
+                accentClass="bg-blue-400/10 text-blue-100"
+                caption={`${formatNumber(listenerStatus.signals_detected_today)} found today across ${formatNumber(listenerStatus.surfaces_active)} active surfaces`}
+                sparkline={listenerSignalSparkline}
+              />
+              <DashboardMetricCard
+                label="Responses Sent"
+                value={listenerAnalytics.responses_sent}
+                accentClass="bg-blue-400/10 text-blue-100"
+                caption={`${formatPercent(listenerAnalytics.response_rate)} of detected signals received a response`}
+                sparkline={listenerResponseSparkline}
+              />
+              <DashboardMetricCard
+                label="Listener CTR"
+                value={listenerAnalytics.click_through_rate}
+                format="percent"
+                accentClass="bg-amber-400/10 text-amber-100"
+                caption={`${formatNumber(listenerAnalytics.responses_pending_review)} replies currently awaiting approval`}
+                sparkline={listenerCtrSparkline}
+              />
+              <DashboardMetricCard
+                label="Listener RoC"
+                value={listenerAnalytics.return_on_compute}
+                format="multiplier"
+                accentClass="bg-emerald-400/10 text-emerald-100"
+                caption={`${formatCurrency(listenerAnalytics.revenue)} revenue on ${formatCurrency(listenerAnalytics.compute_cost)} compute`}
+                sparkline={listenerRocSparkline}
+              />
+            </div>
+
+            <div className="mt-6 grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+              <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="eyebrow">Top surfaces</p>
+                    <h3 className="font-display text-2xl text-white">
+                      Where outreach is converting
+                    </h3>
+                  </div>
+                  <span className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                    {period.toUpperCase()}
+                  </span>
+                </div>
+
+                <div className="mt-5 space-y-3">
+                  {listenerAnalytics.top_surfaces.length ? (
+                    listenerAnalytics.top_surfaces.map((surface) => (
+                      <div
+                        key={surface.surface}
+                        className="rounded-[1.4rem] border border-white/8 bg-slate-950/45 p-4"
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <p className="font-medium text-white">{surface.surface}</p>
+                            <p className="mt-1 text-sm text-slate-400">
+                              {formatNumber(surface.signals_detected)} signals,{" "}
+                              {formatNumber(surface.responses_sent)} responses,{" "}
+                              {formatNumber(surface.clicks)} clicks
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-display text-2xl text-white">
+                              {formatMultiplier(surface.roc)}
+                            </p>
+                            <p className="text-sm text-slate-400">
+                              {formatCurrency(surface.revenue)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-[1.4rem] border border-white/8 bg-slate-950/45 p-4 text-sm leading-7 text-slate-400">
+                      No listener surface data yet. Start the engine to begin ranking channels.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5">
+                  <p className="eyebrow">Review pressure</p>
+                  <h3 className="font-display text-2xl text-white">Queue and approval health</h3>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 p-4">
+                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                        Pending review
+                      </p>
+                      <p className="mt-2 font-display text-3xl text-white">
+                        {formatNumber(listenerStatus.responses_pending_review)}
+                      </p>
+                    </div>
+                    <div className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 p-4">
+                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                        Approval rate
+                      </p>
+                      <p className="mt-2 font-display text-3xl text-white">
+                        {formatPercent(listenerAnalytics.approval_rate)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5">
+                  <p className="eyebrow">Top communities</p>
+                  <h3 className="font-display text-2xl text-white">Where intent clusters</h3>
+                  <div className="mt-5 space-y-3">
+                    {listenerAnalytics.top_subreddits.map((item) => (
+                      <div
+                        key={item.label}
+                        className="flex items-center justify-between rounded-[1.3rem] border border-white/8 bg-slate-950/45 px-4 py-3"
+                      >
+                        <p className="text-sm text-white">{item.label}</p>
+                        <p className="text-sm text-slate-300">{formatNumber(item.count)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5">
+                  <p className="eyebrow">Top products</p>
+                  <h3 className="font-display text-2xl text-white">What outreach actually sells</h3>
+                  <div className="mt-5 space-y-3">
+                    {listenerAnalytics.top_products.slice(0, 3).map((product) => (
+                      <div
+                        key={product.product_id ?? product.product_name}
+                        className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 px-4 py-4"
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-medium text-white">
+                              {product.product_name ?? "Product"}
+                            </p>
+                            <p className="mt-1 text-sm text-slate-400">
+                              {formatNumber(product.responses_sent)} responses,{" "}
+                              {formatNumber(product.clicks)} clicks,{" "}
+                              {formatNumber(product.conversions)} conversions
+                            </p>
+                          </div>
+                          <p className="font-display text-2xl text-white">
+                            {formatMultiplier(product.roc)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <div className="grid gap-6 xl:grid-cols-[1.45fr_0.55fr]">
           <section className="panel p-6">

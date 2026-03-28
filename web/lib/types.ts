@@ -80,6 +80,142 @@ export interface AgentEndpoints {
   ucp: AgentChannelStatus;
 }
 
+export interface BrandVoiceProfile {
+  brand_name: string;
+  story: string;
+  values: string[];
+  tone: string;
+  target_customer?: string | null;
+  dos: string[];
+  donts: string[];
+  sample_responses: Record<string, string>;
+}
+
+export interface ListenerThresholds {
+  composite_min: number;
+  receptivity_min: number;
+}
+
+export interface ListenerSafeguards {
+  max_responses_per_surface_per_day: number;
+  max_responses_per_day: number;
+  max_thread_replies: number;
+  minimum_minutes_between_surface_responses: number;
+  minimum_post_age_minutes: number;
+  one_response_per_author_per_day: boolean;
+  always_disclose_ai: boolean;
+}
+
+export interface ListenerSurfaceConfig {
+  type: "reddit" | "twitter";
+  enabled: boolean;
+  subreddits: string[];
+  keywords: string[];
+  search_queries: string[];
+  poll_interval_seconds: number;
+}
+
+export interface ListenerConfig {
+  aggressiveness: "conservative" | "balanced" | "aggressive";
+  review_mode: "manual" | "auto";
+  auto_post_after_approvals: number;
+  thresholds: ListenerThresholds;
+  safeguards: ListenerSafeguards;
+  surfaces: ListenerSurfaceConfig[];
+}
+
+export interface ListenerStatus {
+  campaign_id: string;
+  status: "running" | "stopped";
+  surfaces_active: number;
+  signals_detected_today: number;
+  responses_pending_review: number;
+  compute_spent_today: number;
+  approved_response_count: number;
+  last_polled_at?: string | null;
+  brand_voice_profile: BrandVoiceProfile;
+  config: ListenerConfig;
+}
+
+export interface ReviewQueueItem {
+  response_id: string;
+  signal_id: string;
+  surface: string;
+  subreddit_or_channel?: string | null;
+  content_text: string;
+  context_text?: string | null;
+  content_url?: string | null;
+  product_id?: string | null;
+  product_name?: string | null;
+  intent_score: Record<string, number | string | boolean>;
+  response_text: string;
+  referral_url?: string | null;
+  confidence: number;
+  needs_review: boolean;
+  review_status: string;
+  created_at: string;
+  relative_time: string;
+}
+
+export interface ListenerTopSurface {
+  surface: string;
+  signals_detected: number;
+  responses_sent: number;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  compute_cost: number;
+  roc: number;
+}
+
+export interface ListenerTopProduct {
+  product_id?: string | null;
+  product_name?: string | null;
+  surface?: string | null;
+  responses_sent: number;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  compute_cost: number;
+  roc: number;
+}
+
+export interface ListenerCountBreakdown {
+  label: string;
+  count: number;
+}
+
+export interface ListenerAnalyticsPoint {
+  date: string;
+  signals_detected: number;
+  responses_sent: number;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  compute_cost: number;
+}
+
+export interface ListenerAnalytics {
+  period: string;
+  signals_detected: number;
+  responses_sent: number;
+  responses_pending_review: number;
+  approval_rate: number;
+  response_rate: number;
+  clicks: number;
+  click_through_rate: number;
+  conversions: number;
+  conversion_rate: number;
+  revenue: number;
+  compute_cost: number;
+  return_on_compute: number;
+  top_surfaces: ListenerTopSurface[];
+  top_products: ListenerTopProduct[];
+  top_subreddits: ListenerCountBreakdown[];
+  intent_score_distribution: ListenerCountBreakdown[];
+  daily: ListenerAnalyticsPoint[];
+}
+
 export interface CampaignOverview {
   id: string;
   merchant_id: string;

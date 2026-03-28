@@ -9,6 +9,7 @@ from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.campaigns import router as campaigns_router
 from app.api.feeds import router as feeds_router
+from app.api.listener import router as listener_router
 from app.api.mcp import router as mcp_router
 from app.api.onboarding import router as onboarding_router
 from app.api.products import router as products_router
@@ -56,3 +57,4 @@ app.include_router(billing_router)
 app.include_router(tracking_router)
 app.include_router(feeds_router)
 app.include_router(mcp_router)
+app.include_router(listener_router)

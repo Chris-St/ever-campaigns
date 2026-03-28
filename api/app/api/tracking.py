@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db
-from app.models.entities import Click, Conversion, Match, Product
+from app.models.entities import AgentResponse, Click, Conversion, Match, Product
 from app.schemas.contracts import ShopifyOrderWebhook
 
 
@@ -19,13 +19,30 @@ router = APIRouter(tags=["tracking"])
 def redirect_to_product(
     product_id: str,
     q: str | None = None,
+    src: str | None = None,
+    iid: str | None = None,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     product = db.scalar(select(Product).where(Product.id == product_id))
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    if q:
+    if iid:
+        response = db.scalar(select(AgentResponse).where(AgentResponse.id == iid))
+        if response is not None:
+            click = Click(
+                match_id=None,
+                product_id=product_id,
+                campaign_id=response.campaign_id,
+                channel="intent_listener",
+                source="intent_listener",
+                surface=src or response.surface,
+                response_id=response.id,
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(click)
+            db.commit()
+    elif q:
         match = db.scalar(
             select(Match)
             .where(Match.product_id == product_id, Match.query_id == q)
@@ -36,6 +53,8 @@ def redirect_to_product(
             product_id=product_id,
             campaign_id=match.campaign_id if match else None,
             channel=match.channel if match else "mcp",
+            source=match.channel if match else "mcp",
+            surface=src,
             created_at=datetime.now(timezone.utc),
         )
         db.add(click)
