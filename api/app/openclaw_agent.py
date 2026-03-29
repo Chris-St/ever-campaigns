@@ -122,8 +122,36 @@ def build_response_text(config: dict[str, Any], product: dict[str, Any]) -> str:
     )
 
 
-def build_referral_url(product: dict[str, Any], campaign_id: str, surface: str, interaction_id: str) -> str:
-    return f"{product['referral_base']}?src={quote(surface)}&cid={quote(campaign_id)}&iid={quote(interaction_id)}"
+def build_referral_url(product: dict[str, Any], campaign_id: str, surface: str) -> str:
+    return f"{product['referral_base']}?src={quote(surface)}&cid={quote(campaign_id)}"
+
+
+def map_action_type(template: dict[str, str]) -> str:
+    if template["surface"] == "email":
+        return "email"
+    if template["category"] == "outreach":
+        return "outreach"
+    if template["category"] == "content_creation":
+        return "content"
+    return "reply"
+
+
+def build_rationale(template: dict[str, str], product: dict[str, Any]) -> str:
+    return (
+        f"This looks like a strong fit because the person is explicitly asking for help and "
+        f"{product['name']} matches the use case on {template['surface']}."
+    )
+
+
+def build_execution_instructions(template: dict[str, str], source_link: str | None, response_text: str) -> str:
+    target = source_link or "the source conversation"
+    return (
+        f"Step 1: Open {target}. "
+        f"Step 2: Start a {map_action_type(template)}. "
+        f"Step 3: Paste the proposed response below exactly. "
+        f"Step 4: Include the tracked referral link if the surface allows it. "
+        f"Step 5: Send or publish manually."
+    )
 
 
 def post_event(
@@ -230,7 +258,7 @@ def main() -> int:
             if (
                 not config["budget"]["remaining"]
                 or config.get("status") in {"paused", "stopped", "budget_exhausted"}
-                or config.get("campaign_status") == "paused"
+                or config.get("campaign_status") in {"pending_payment", "paused_manual", "paused_budget", "canceled"}
                 or not config.get("products")
             ):
                 time.sleep(30)
@@ -246,33 +274,37 @@ def main() -> int:
             template_index += 1
             product = choose_product(config["products"], template)
 
-            interaction_id = str(uuid4())
-            tracked_url = (
-                build_referral_url(product, config["campaign_id"], template["surface"], interaction_id)
-                if template["category"] in {"engagement", "outreach"}
-                else None
-            )
+            tracked_url = build_referral_url(product, config["campaign_id"], template["surface"])
             input_tokens = 640
-            output_tokens = 220 if template["category"] in {"engagement", "outreach"} else 120
+            output_tokens = 220 if template["category"] in {"engagement", "outreach"} else 160
             total_tokens = input_tokens + output_tokens
             total_cost = compute_cost(input_tokens, output_tokens)
+            response_text = build_response_text(config, product)
+            source_link = source_url(template["surface"], str(uuid4()))
 
             payload = {
-                "event_type": "action",
+                "event_type": "proposal",
                 "category": template["category"],
                 "surface": template["surface"],
                 "description": template["description"],
-                "source_url": source_url(template["surface"], interaction_id),
+                "source_url": source_link,
                 "source_content": template["content"],
                 "source_author": template["author"],
+                "source_context": template["description"],
                 "target_audience": template["audience"],
+                "intent_score": {
+                    "relevance": 82 if template["category"] in {"engagement", "outreach"} else 70,
+                    "intent": 78 if template["surface"] in {"reddit", "twitter", "forum"} else 64,
+                    "fit": 88,
+                    "receptivity": 72,
+                    "composite": 80 if template["category"] in {"engagement", "outreach"} else 68,
+                },
+                "action_type": map_action_type(template),
                 "product_id": product["id"],
                 "referral_url": tracked_url,
-                "response_text": (
-                    build_response_text(config, product)
-                    if template["category"] in {"engagement", "outreach"}
-                    else None
-                ),
+                "proposed_response": response_text,
+                "rationale": build_rationale(template, product),
+                "execution_instructions": build_execution_instructions(template, source_link, response_text),
                 "tokens_used": total_tokens,
                 "compute_cost_usd": total_cost,
                 "expected_impact": (

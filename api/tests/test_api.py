@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 os.environ["DATABASE_URL"] = f"sqlite:///{temp_db.name}"
+os.environ["STRIPE_SECRET_KEY"] = "sk_test_123"
+os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_123"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -20,13 +22,42 @@ from app.services.openclaw_runtime import (  # noqa: E402
 )
 
 
-def test_full_flow() -> None:
+def test_full_flow(monkeypatch) -> None:
     init_db()
     client = TestClient(app)
     now = datetime.now(timezone.utc)
     research_timestamp = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
     action_timestamp = (now - timedelta(minutes=22)).isoformat().replace("+00:00", "Z")
     strategy_timestamp = (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    stripe_subscription_id = "sub_test_123"
+    campaign_id_holder: dict[str, str] = {"campaign_id": ""}
+
+    monkeypatch.setattr(
+        "app.api.billing.create_checkout_session",
+        lambda campaign, user: {
+            "id": "cs_test_123",
+            "url": "https://checkout.stripe.test/session/cs_test_123",
+            "customer_id": "cus_test_123",
+            "subscription_id": stripe_subscription_id,
+            "mode": "stripe_test",
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.billing.construct_webhook_event",
+        lambda payload, signature: {
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "cs_test_123",
+                    "customer": "cus_test_123",
+                    "subscription": stripe_subscription_id,
+                    "client_reference_id": campaign_id_holder["campaign_id"],
+                    "metadata": {"campaign_id": campaign_id_holder["campaign_id"]},
+                }
+            },
+        },
+    )
+
     brand_context_profile = {
         "positioning": "Bia makes premium movement essentials for women who care about fit, comfort, and quality.",
         "ideal_customer": "Women who want premium underwear for running, training, and recovery.",
@@ -70,6 +101,7 @@ def test_full_flow() -> None:
     assert create_campaign.status_code == 200
     create_campaign_json = create_campaign.json()
     campaign_id = create_campaign_json["id"]
+    campaign_id_holder["campaign_id"] = campaign_id
     agent_api_key = create_campaign_json["agent_endpoints"]["openclaw"]["api_key"]
     assert create_campaign_json["status"] == "pending_payment"
     assert agent_api_key.startswith("ek_live_")
@@ -80,14 +112,24 @@ def test_full_flow() -> None:
         headers=headers,
     )
     assert checkout.status_code == 200
-    assert checkout.json()["activated"] is True
+    assert checkout.json()["activated"] is False
+    assert checkout.json()["checkout_url"] == "https://checkout.stripe.test/session/cs_test_123"
+
+    activate = client.post(
+        "/billing/webhooks/stripe",
+        data="{}",
+        headers={"Stripe-Signature": "sig_test"},
+    )
+    assert activate.status_code == 200
 
     overview = client.get(f"/campaigns/{campaign_id}", headers=headers)
     assert overview.status_code == 200
     overview_json = overview.json()
     assert overview_json["status"] == "active"
     assert overview_json["merchant_slug"] == merchant_slug
-    assert overview_json["revenue"] > 0
+    assert overview_json["revenue"] == 0
+    assert overview_json["billing"]["mode"] == "stripe_test"
+    assert overview_json["billing"]["payment_method"] == "Managed in Stripe Checkout"
     assert overview_json["agent_endpoints"]["mcp"]["public_url"].endswith(f"/{merchant_slug}")
     assert overview_json["agent_endpoints"]["openclaw"]["api_key"] is None
     assert overview_json["agent_endpoints"]["openclaw"]["api_key_preview"].startswith("ek_live_****")
@@ -137,9 +179,9 @@ def test_full_flow() -> None:
     assert openclaw_skill.status_code == 200
     assert openclaw_skill.headers["content-type"].startswith("text/markdown")
     openclaw_skill_text = openclaw_skill.text
-    assert "Ever Autonomous Sales Agent" in openclaw_skill_text
+    assert "Ever Propose-Only Sales Agent" in openclaw_skill_text
     assert "/agent-config" in openclaw_skill_text
-    assert "Which channels and platforms to use" in openclaw_skill_text
+    assert "You NEVER publish" in openclaw_skill_text
     assert "Made in Canada" in openclaw_skill_text
     assert "Reddit-Specific Rules" not in openclaw_skill_text
 
@@ -173,6 +215,9 @@ def test_full_flow() -> None:
     assert agent_config_json["campaign_id"] == campaign_id
     assert agent_config_json["status"] == "running"
     assert agent_config_json["reporting"]["api_key"] == agent_api_key
+    assert agent_config_json["operating_mode"] == "propose_only"
+    assert agent_config_json["manual_execution_required"] is True
+    assert agent_config_json["approval_required"] is True
     assert agent_config_json["brand"]["story"]
     assert "surfaces" not in agent_config_json
     assert "rules" not in agent_config_json
@@ -185,53 +230,78 @@ def test_full_flow() -> None:
     assert len(agent_config_json["products"][0]["key_selling_points"]) >= 1
     product_id = agent_config_json["products"][0]["id"]
 
-    research_event = client.post(
+    proposal_event = client.post(
         f"/api/campaigns/{campaign_id}/events",
         headers=agent_headers,
         json={
-            "event_type": "action",
-            "category": "research",
-            "surface": "forum",
-            "description": "Reviewed a premium-basics forum thread to gauge fit before engaging.",
-            "source_url": "https://forum.ever.local/thread/test123",
-            "source_content": "Looking for premium workout underwear that still feels good all day.",
-            "source_author": "forum:movementclub",
-            "target_audience": "Women buying premium active basics",
-            "product_id": product_id,
-            "tokens_used": 620,
-            "compute_cost_usd": 0.0046,
-            "expected_impact": "medium",
-            "timestamp": research_timestamp,
-        },
-    )
-    assert research_event.status_code == 200
-    assert research_event.json()["status"] == "recorded"
-
-    response_action = client.post(
-        f"/api/campaigns/{campaign_id}/events",
-        headers=agent_headers,
-        json={
-            "event_type": "action",
+            "event_type": "proposal",
             "category": "engagement",
             "surface": "reddit",
-            "description": "Posted a helpful reply in a running thread after confirming product fit.",
+            "description": "Drafted a helpful reply in a running thread after confirming product fit.",
             "source_url": "https://reddit.com/r/running/comments/test123",
             "source_content": "What underwear doesn't chafe on long runs?",
             "source_author": "u/runner_jane",
+            "source_context": "Thread asking for help before marathon training ramps up.",
             "target_audience": "Women training for distance running",
-            "response_text": "If the goal is comfort during movement, breathable and stay-put matters most. Bia's High Movement Thong is built for running and dries fast. I'm an AI agent for Bia (via Ever).",
-            "referral_url": f"http://localhost:8000/go/{product_id}?src=reddit&cid={campaign_id}&iid=reply_evt_1",
-            "product_id": product_id,
-            "tokens_used": 1150,
-            "compute_cost_usd": 0.0082,
-            "expected_impact": "high",
-            "timestamp": action_timestamp,
+            "intent_score": {
+                "relevance": 85,
+                "intent": 80,
+                "fit": 92,
+                "receptivity": 74,
+                "composite": 83,
+            },
+            "action_type": "reply",
+            "proposed_response": "If the goal is comfort during movement, breathable and stay-put matters most. Bia's High Movement Thong is built for running and dries fast. I'm an AI agent for Bia (via Ever).",
+            "rationale": "The person is explicitly asking for a strong-fit recommendation and the product is purpose-built for this use case.",
+                "execution_instructions": "Open the Reddit thread, click reply, paste the response, and include the tracked link if appropriate.",
+                "product_id": product_id,
+                "tokens_used": 620,
+                "compute_cost_usd": 4.6,
+                "timestamp": research_timestamp,
+            },
+        )
+    assert proposal_event.status_code == 200
+    proposal_event_json = proposal_event.json()
+    proposal_id = proposal_event_json["proposal_id"]
+    assert proposal_event_json["status"] == "proposed"
+    assert proposal_event_json["budget_remaining"] < 2400
+    assert proposal_event_json["event_id"] == proposal_id
+
+    proposals = client.get(
+        f"/campaigns/{campaign_id}/proposals?status=all&sort=newest",
+        headers=headers,
+    )
+    assert proposals.status_code == 200
+    proposals_json = proposals.json()
+    assert len(proposals_json) == 1
+    assert proposals_json[0]["status"] == "proposed"
+    assert f"cid={campaign_id}" in proposals_json[0]["referral_url"]
+    assert f"pid={proposal_id}" in proposals_json[0]["referral_url"]
+
+    edited_proposal = client.put(
+        f"/campaigns/{campaign_id}/proposals/{proposal_id}/edit",
+        headers=headers,
+        json={
+            "proposed_response": "Edited reply that still stays helpful, direct, and disclosure-safe.",
         },
     )
-    assert response_action.status_code == 200
-    assert response_action.json()["status"] == "recorded"
-    assert response_action.json()["budget_remaining"] < 2400
-    assert response_action.json()["event_id"] == "reply_evt_1"
+    assert edited_proposal.status_code == 200
+    assert edited_proposal.json()["proposed_response"].startswith("Edited reply")
+
+    approved_proposal = client.post(
+        f"/campaigns/{campaign_id}/proposals/{proposal_id}/approve",
+        headers=headers,
+    )
+    assert approved_proposal.status_code == 200
+    assert approved_proposal.json()["status"] == "approved"
+
+    executed_proposal = client.post(
+        f"/campaigns/{campaign_id}/proposals/{proposal_id}/executed",
+        headers=headers,
+        json={"notes": "Posted manually from the operator queue."},
+    )
+    assert executed_proposal.status_code == 200
+    assert executed_proposal.json()["status"] == "executed_manually"
 
     strategy_update = client.post(
         f"/api/campaigns/{campaign_id}/events",
@@ -258,14 +328,14 @@ def test_full_flow() -> None:
     assert updated_listener_status.status_code == 200
     updated_listener_status_json = updated_listener_status.json()
     assert updated_listener_status_json["status"] == "running"
-    assert updated_listener_status_json["signals_today"] >= 2
-    assert updated_listener_status_json["responses_today"] >= 1
+    assert updated_listener_status_json["signals_today"] >= 1
+    assert updated_listener_status_json["proposals_pending"] == 0
     assert updated_listener_status_json["strategy_updates_today"] >= 1
     assert updated_listener_status_json["active_surface_count"] >= 2
     assert updated_listener_status_json["last_active"] is not None
 
     redirect = client.get(
-        f"/go/{product_id}?src=reddit&iid=reply_evt_1",
+        f"/go/{product_id}?src=reddit&pid={proposal_id}",
         follow_redirects=False,
     )
     assert redirect.status_code in {302, 307}
@@ -276,10 +346,20 @@ def test_full_flow() -> None:
             "campaign_id": campaign_id,
             "product_id": product_id,
             "order_value": 32.0,
+            "proposal_id": proposal_id,
         },
     )
     assert conversion.status_code == 200
     assert conversion.json()["status"] == "recorded"
+
+    outcome = client.post(
+        f"/campaigns/{campaign_id}/proposals/{proposal_id}/outcome",
+        headers=headers,
+        json={"outcome": "converted", "notes": "Shopify order confirmed."},
+    )
+    assert outcome.status_code == 200
+    assert outcome.json()["status"] == "outcome_recorded"
+    assert outcome.json()["attribution_confidence"] == "confirmed"
 
     listener_analytics = client.get(
         f"/campaigns/{campaign_id}/listener/analytics?period=30d",
@@ -287,7 +367,10 @@ def test_full_flow() -> None:
     )
     assert listener_analytics.status_code == 200
     listener_analytics_json = listener_analytics.json()
-    assert listener_analytics_json["signals_detected"] >= 2
+    assert listener_analytics_json["signals_detected"] >= 1
+    assert listener_analytics_json["proposals_generated"] >= 1
+    assert listener_analytics_json["proposals_approved"] >= 1
+    assert listener_analytics_json["proposals_executed"] >= 1
     assert listener_analytics_json["responses_sent"] >= 1
     assert listener_analytics_json["strategy_updates"] >= 1
     assert listener_analytics_json["clicks"] >= 1
@@ -295,7 +378,6 @@ def test_full_flow() -> None:
     assert listener_analytics_json["revenue"] >= 32.0
     assert listener_analytics_json["compute_cost"] > 0
     assert any(item["surface"] == "reddit" for item in listener_analytics_json["top_surfaces"])
-    assert any(item["surface"] == "forum" for item in listener_analytics_json["top_surfaces"])
     assert any(
         item["surface"] == "reddit" for item in listener_analytics_json["channel_breakdown"]
     )
@@ -305,11 +387,11 @@ def test_full_flow() -> None:
     assert len(listener_analytics_json["daily_series"]) >= 1
 
     action_activity = client.get(
-        f"/campaigns/{campaign_id}/activity?limit=20&event_type=action",
+        f"/campaigns/{campaign_id}/activity?limit=20&event_type=proposal",
         headers=headers,
     )
     assert action_activity.status_code == 200
-    assert any(entry["event_type"] == "action" for entry in action_activity.json())
+    assert any(entry["event_type"].startswith("proposal") for entry in action_activity.json())
     assert any(entry["surface"] == "reddit" for entry in action_activity.json())
 
     review_queue = client.get(f"/campaigns/{campaign_id}/review", headers=headers)
@@ -396,3 +478,37 @@ def test_full_flow() -> None:
     stopped_listener = client.post(f"/campaigns/{campaign_id}/listener/stop", headers=headers)
     assert stopped_listener.status_code == 200
     assert stopped_listener.json()["status"] == "stopped"
+
+    monkeypatch.setattr(
+        "app.api.billing.construct_webhook_event",
+        lambda payload, signature: {
+            "type": "invoice.payment_failed",
+            "data": {"object": {"subscription": stripe_subscription_id}},
+        },
+    )
+    payment_failed = client.post(
+        "/billing/webhooks/stripe",
+        data="{}",
+        headers={"Stripe-Signature": "sig_test"},
+    )
+    assert payment_failed.status_code == 200
+    paused_overview = client.get(f"/campaigns/{campaign_id}", headers=headers)
+    assert paused_overview.status_code == 200
+    assert paused_overview.json()["status"] == "paused_manual"
+
+    monkeypatch.setattr(
+        "app.api.billing.construct_webhook_event",
+        lambda payload, signature: {
+            "type": "customer.subscription.deleted",
+            "data": {"object": {"id": stripe_subscription_id}},
+        },
+    )
+    canceled = client.post(
+        "/billing/webhooks/stripe",
+        data="{}",
+        headers={"Stripe-Signature": "sig_test"},
+    )
+    assert canceled.status_code == 200
+    canceled_overview = client.get(f"/campaigns/{campaign_id}", headers=headers)
+    assert canceled_overview.status_code == 200
+    assert canceled_overview.json()["status"] == "canceled"

@@ -76,7 +76,14 @@ class CampaignCreateRequest(BaseModel):
 
 class CampaignUpdateRequest(BaseModel):
     budget_monthly: float | None = None
-    status: Literal["active", "paused", "pending_payment", "draft"] | None = None
+    status: Literal[
+        "active",
+        "pending_payment",
+        "paused_budget",
+        "paused_manual",
+        "canceled",
+        "draft",
+    ] | None = None
     auto_optimize: bool | None = None
 
 
@@ -91,6 +98,7 @@ class BillingSummary(BaseModel):
     mode: str
     plan_name: str
     payment_method: str
+    status: str | None = None
     invoices: list[BillingInvoice] = Field(default_factory=list)
 
 
@@ -195,8 +203,12 @@ class ListenerStatus(BaseModel):
     uptime_hours: float
     signals_detected_today: int
     responses_pending_review: int
+    proposals_pending: int = 0
     compute_spent_today: float
     approved_response_count: int
+    operating_mode: str = "propose_only"
+    manual_execution_required: bool = True
+    approval_required: bool = True
     brand_voice_profile: BrandVoiceProfile
     brand_context_profile: BrandContextProfile
     config: ListenerConfig
@@ -305,6 +317,10 @@ class ListenerAnalytics(BaseModel):
     signals_detected: int
     responses_sent: int
     responses_pending_review: int
+    proposals_generated: int = 0
+    proposals_approved: int = 0
+    proposals_executed: int = 0
+    execution_rate: float = 0.0
     approval_rate: float
     response_rate: float
     clicks: int
@@ -350,8 +366,12 @@ class AgentEventRequest(BaseModel):
     target_audience: str | None = None
     intent_score: AgentIntentScore = Field(default_factory=AgentIntentScore)
     action_taken: str | None = None
+    action_type: str | None = None
     response_text: str | None = None
+    proposed_response: str | None = None
+    rationale: str | None = None
     referral_url: str | None = None
+    execution_instructions: str | None = None
     product_id: str | None = None
     tokens_used: int = 0
     compute_cost_usd: float = 0.0
@@ -362,7 +382,8 @@ class AgentEventRequest(BaseModel):
 
 
 class AgentEventResponse(BaseModel):
-    event_id: str
+    event_id: str | None = None
+    proposal_id: str | None = None
     status: str
     budget_remaining: float
     budget_exhausted: bool
@@ -427,12 +448,29 @@ class AgentConfigResponse(BaseModel):
     campaign_id: str
     status: str | None = None
     campaign_status: str | None = None
+    operating_mode: Literal["propose_only"] = "propose_only"
+    manual_execution_required: bool = True
+    approval_required: bool = True
     brand: AgentBrandConfig
     products: list[AgentProductConfig] = Field(default_factory=list)
     budget: AgentBudgetConfig
     reporting: AgentReportingConfig
     constraints: AgentConstraintsConfig
     context: AgentContextConfig
+
+
+class ProposalStatsSummary(BaseModel):
+    total: int = 0
+    pending: int = 0
+    approved: int = 0
+    executed: int = 0
+    rejected: int = 0
+
+
+class AttributionConfidenceSummary(BaseModel):
+    confirmed: int = 0
+    estimated: int = 0
+    unattributed: int = 0
 
 
 class OpenClawSkillBundleResponse(BaseModel):
@@ -465,6 +503,8 @@ class CampaignOverview(BaseModel):
     conversions: int
     revenue: float
     return_on_compute: float
+    proposals: ProposalStatsSummary = Field(default_factory=ProposalStatsSummary)
+    attribution_confidence: AttributionConfidenceSummary = Field(default_factory=AttributionConfidenceSummary)
     compute_series: list[float] = Field(default_factory=list)
     revenue_series: list[float] = Field(default_factory=list)
     alerts: list[str] = Field(default_factory=list)
@@ -532,6 +572,8 @@ class ActivityEntry(BaseModel):
     compute_cost: float = 0.0
     expected_impact: str | None = None
     source_url: str | None = None
+    proposal_id: str | None = None
+    proposal_status: str | None = None
 
 
 class BillingCheckoutRequest(BaseModel):
@@ -543,7 +585,9 @@ class BillingCheckoutResponse(BaseModel):
     campaign_id: str
     activated: bool
     message: str
+    status: str | None = None
     checkout_url: str | None = None
+    checkout_session_id: str | None = None
 
 
 class ShopifyOrderWebhook(BaseModel):
@@ -551,6 +595,62 @@ class ShopifyOrderWebhook(BaseModel):
     product_id: str
     order_value: float
     query_id: str | None = None
+    proposal_id: str | None = None
+
+
+class ProposalRecord(SchemaModel):
+    id: str
+    campaign_id: str
+    product_id: str | None = None
+    product_name: str | None = None
+    product_image: str | None = None
+    product_price: float | None = None
+    product_currency: str | None = None
+    surface: str | None = None
+    source_url: str | None = None
+    source_content: str | None = None
+    source_author: str | None = None
+    source_context: str | None = None
+    intent_score: dict[str, Any] = Field(default_factory=dict)
+    action_type: str
+    proposed_response: str
+    rationale: str | None = None
+    referral_url: str | None = None
+    execution_instructions: str | None = None
+    status: str
+    approved_at: str | None = None
+    rejected_at: str | None = None
+    rejection_reason: str | None = None
+    executed_at: str | None = None
+    execution_notes: str | None = None
+    outcome: str | None = None
+    outcome_notes: str | None = None
+    outcome_recorded_at: str | None = None
+    tokens_used: int = 0
+    compute_cost_usd: float = 0.0
+    created_at: str
+    relative_time: str
+    clicks: int = 0
+    conversions: int = 0
+    revenue: float = 0.0
+    attribution_confidence: Literal["confirmed", "estimated", "unattributed"] = "unattributed"
+
+
+class ProposalRejectRequest(BaseModel):
+    reason: str | None = None
+
+
+class ProposalEditRequest(BaseModel):
+    proposed_response: str
+
+
+class ProposalExecutedRequest(BaseModel):
+    notes: str | None = None
+
+
+class ProposalOutcomeRequest(BaseModel):
+    outcome: str
+    notes: str | None = None
 
 
 class SearchProductsRequest(BaseModel):

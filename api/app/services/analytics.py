@@ -15,9 +15,12 @@ from app.models.entities import (
     Conversion,
     IntentSignal,
     Match,
+    Proposal,
     Product,
 )
+from app.services.billing import stripe_mode
 from app.services.endpoints import build_agent_endpoints
+from app.services.proposals import build_attribution_confidence_summary, build_proposal_stats
 
 
 def ensure_utc(value: datetime) -> datetime:
@@ -54,6 +57,9 @@ def compute_campaign_overview(
     agent_events = db.scalars(
         select(AgentEvent).where(AgentEvent.campaign_id == campaign.id)
     ).all()
+    proposals = db.scalars(
+        select(Proposal).where(Proposal.campaign_id == campaign.id).options(joinedload(Proposal.product))
+    ).all()
     conversions = db.scalars(
         select(Conversion)
         .where(Conversion.campaign_id == campaign.id)
@@ -67,6 +73,10 @@ def compute_campaign_overview(
         + sum(event.compute_cost_usd for event in agent_events),
         2,
     )
+    compute_spent = round(
+        compute_spent + sum(proposal.compute_cost_usd for proposal in proposals),
+        2,
+    )
     revenue = round(sum(conversion.order_value for conversion in conversions), 2)
     return_on_compute = round(revenue / compute_spent, 2) if compute_spent else 0.0
     budget_utilization = round(
@@ -77,6 +87,7 @@ def compute_campaign_overview(
     cost_events.extend((signal.created_at, signal.scoring_cost) for signal in listener_signals)
     cost_events.extend((response.created_at, response.generation_cost) for response in listener_responses)
     cost_events.extend((event.created_at, event.compute_cost_usd) for event in agent_events)
+    cost_events.extend((proposal.created_at, proposal.compute_cost_usd) for proposal in proposals)
     projected_monthly_spend = round(project_monthly_spend(cost_events), 2)
     alerts = []
     if budget_utilization >= 1:
@@ -91,11 +102,14 @@ def compute_campaign_overview(
         listener_signals,
         listener_responses,
         agent_events,
+        proposals,
         conversions,
     )
 
     campaign.budget_spent = compute_spent
     db.commit()
+    proposal_stats = build_proposal_stats(db, campaign.id)
+    attribution_confidence = build_attribution_confidence_summary(db, campaign.id)
 
     return {
         "id": campaign.id,
@@ -113,13 +127,20 @@ def compute_campaign_overview(
         "conversions": len(conversions),
         "revenue": revenue,
         "return_on_compute": return_on_compute,
+        "proposals": proposal_stats,
+        "attribution_confidence": attribution_confidence,
         "compute_series": compute_series,
         "revenue_series": revenue_series,
         "alerts": alerts,
         "billing": {
-            "mode": "demo",
+            "mode": stripe_mode(),
             "plan_name": f"${campaign.budget_monthly:,.0f}/month compute budget",
-            "payment_method": "Demo Visa ending in 4242",
+            "payment_method": (
+                "Managed in Stripe Checkout"
+                if campaign.stripe_checkout_session_id or campaign.stripe_subscription_id
+                else "Stripe not connected yet"
+            ),
+            "status": campaign.status,
             "invoices": build_invoices(campaign),
         },
         "agent_endpoints": build_agent_endpoints(campaign, api_key_plaintext=agent_api_key_plaintext),
@@ -146,6 +167,7 @@ def sparkline_series(
     listener_signals: list[IntentSignal],
     listener_responses: list[AgentResponse],
     agent_events: list[AgentEvent],
+    proposals: list[Proposal],
     conversions: list[Conversion],
 ) -> tuple[list[float], list[float]]:
     now = datetime.now(timezone.utc).date()
@@ -159,6 +181,8 @@ def sparkline_series(
         compute_map[ensure_utc(response.created_at).date()] += response.generation_cost
     for event in agent_events:
         compute_map[ensure_utc(event.created_at).date()] += event.compute_cost_usd
+    for proposal in proposals:
+        compute_map[ensure_utc(proposal.created_at).date()] += proposal.compute_cost_usd
     for conversion in conversions:
         revenue_map[ensure_utc(conversion.created_at).date()] += conversion.order_value
 
@@ -185,6 +209,7 @@ def build_metric_series(db: Session, campaign_id: str, period: str) -> list[dict
     listener_signals = db.scalars(select(IntentSignal).where(IntentSignal.campaign_id == campaign_id)).all()
     listener_responses = db.scalars(select(AgentResponse).where(AgentResponse.campaign_id == campaign_id)).all()
     agent_events = db.scalars(select(AgentEvent).where(AgentEvent.campaign_id == campaign_id)).all()
+    proposals = db.scalars(select(Proposal).where(Proposal.campaign_id == campaign_id)).all()
     conversions = db.scalars(select(Conversion).where(Conversion.campaign_id == campaign_id)).all()
     compute_map = defaultdict(float)
     revenue_map = defaultdict(float)
@@ -197,6 +222,8 @@ def build_metric_series(db: Session, campaign_id: str, period: str) -> list[dict
         compute_map[ensure_utc(response.created_at).date()] += response.generation_cost
     for event in agent_events:
         compute_map[ensure_utc(event.created_at).date()] += event.compute_cost_usd
+    for proposal in proposals:
+        compute_map[ensure_utc(proposal.created_at).date()] += proposal.compute_cost_usd
     for conversion in conversions:
         conversion_date = ensure_utc(conversion.created_at).date()
         revenue_map[conversion_date] += conversion.order_value
@@ -227,6 +254,9 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
     agent_events = db.scalars(
         select(AgentEvent).where(AgentEvent.campaign_id == campaign.id)
     ).all()
+    proposals = db.scalars(
+        select(Proposal).where(Proposal.campaign_id == campaign.id)
+    ).all()
     products = db.scalars(
         select(Product)
         .where(Product.merchant_id == campaign.merchant_id)
@@ -242,6 +272,7 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
         product_signals = [signal for signal in listener_signals if signal.product_id == product.id]
         product_responses = [response for response in listener_responses if response.product_id == product.id]
         product_events = [event for event in agent_events if event.product_id == product.id]
+        product_proposals = [proposal for proposal in proposals if proposal.product_id == product.id]
         clicks = [click for click in product.clicks if click.campaign_id == campaign.id]
         conversions = [conversion for conversion in product.conversions if conversion.campaign_id == campaign.id]
         compute_spent = (
@@ -249,6 +280,7 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
             + sum(signal.scoring_cost for signal in product_signals)
             + sum(response.generation_cost for response in product_responses)
             + sum(event.compute_cost_usd for event in product_events)
+            + sum(proposal.compute_cost_usd for proposal in product_proposals)
         )
         revenue = sum(conversion.order_value for conversion in conversions)
         roc = round(revenue / compute_spent, 2) if compute_spent else 0.0
@@ -264,7 +296,7 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
                 "price": product.price,
                 "currency": product.currency,
                 "image": product.images[0] if product.images else None,
-                "matches": len(matches) + len(product_signals) + len(product_events),
+                "matches": len(matches) + len(product_signals) + len(product_events) + len(product_proposals),
                 "clicks": len(clicks),
                 "conversions": len(conversions),
                 "revenue": round(revenue, 2),
@@ -328,9 +360,14 @@ def build_activity_feed(
                     "compute_cost": match.compute_cost,
                 }
             )
-    if normalized_filter in ("all", "action", "strategy", "response"):
+    if normalized_filter in ("all", "action", "strategy", "response", "proposal"):
         for agent_event in agent_events:
-            event_bucket = "strategy" if agent_event.event_type == "strategy_update" else "action"
+            if agent_event.event_type == "strategy_update":
+                event_bucket = "strategy"
+            elif agent_event.event_type.startswith("proposal"):
+                event_bucket = "proposal"
+            else:
+                event_bucket = "action"
             if normalized_filter not in ("all", "response") and normalized_filter != event_bucket:
                 continue
             if normalized_filter == "response" and agent_event.event_type != "action":
@@ -338,6 +375,10 @@ def build_activity_feed(
             title = (
                 "Strategy update"
                 if agent_event.event_type == "strategy_update"
+                else "Proposal update"
+                if agent_event.event_type.startswith("proposal_")
+                else "New proposal"
+                if agent_event.event_type == "proposal"
                 else f"{(agent_event.category or 'action').replace('_', ' ').title()} on {agent_event.surface or 'other'}"
             )
             events.append(
@@ -356,12 +397,16 @@ def build_activity_feed(
                     "compute_cost": agent_event.compute_cost_usd,
                     "expected_impact": agent_event.expected_impact,
                     "source_url": agent_event.source_url,
+                    "proposal_id": agent_event.details.get("proposal_id") if agent_event.details else None,
+                    "proposal_status": agent_event.details.get("proposal_status") if agent_event.details else None,
                 }
             )
 
     if normalized_filter in ("all", "click"):
         for click in clicks:
-            if click.source in {"intent_listener", "autonomous_agent"}:
+            if click.source == "proposal":
+                detail = f"Viewed via a manually executed proposal on {click.surface or 'the web'}"
+            elif click.source in {"intent_listener", "autonomous_agent"}:
                 detail = f"Viewed via {click.surface or 'social'} autonomous agent activity"
             else:
                 agent_name = click.match.query.agent_source if click.match and click.match.query else "an agent"
@@ -384,7 +429,11 @@ def build_activity_feed(
 
     if normalized_filter in ("all", "conversion"):
         for conversion in conversions:
-            if conversion.click and conversion.click.source in {"intent_listener", "autonomous_agent"}:
+            if conversion.click and conversion.click.source == "proposal":
+                detail = (
+                    f"${conversion.order_value:,.2f} attributed revenue from a tracked proposal"
+                )
+            elif conversion.click and conversion.click.source in {"intent_listener", "autonomous_agent"}:
                 detail = (
                     f"${conversion.order_value:,.2f} attributed revenue from "
                     f"{(conversion.click.surface or 'agent').title()} activity"
@@ -500,16 +549,14 @@ def extract_constraint_breakdown(product: Product, match: Match) -> list[str]:
 
 
 def build_invoices(campaign: Campaign) -> list[dict]:
-    invoices = []
-    start = campaign.created_at
-    for index in range(3):
-        invoice_date = (start + timedelta(days=30 * index)).date().isoformat()
-        invoices.append(
-            {
-                "id": f"inv_{campaign.id[:8]}_{index + 1}",
-                "date": invoice_date,
-                "amount": round(campaign.budget_monthly, 2),
-                "status": "paid" if index < 2 else "scheduled",
-            }
-        )
-    return invoices
+    if not campaign.stripe_checkout_session_id and not campaign.stripe_subscription_id:
+        return []
+    invoice_status = "paid" if campaign.status == "active" else "open" if campaign.status == "pending_payment" else "canceled"
+    return [
+        {
+            "id": campaign.stripe_subscription_id or campaign.stripe_checkout_session_id or f"inv_{campaign.id[:8]}",
+            "date": campaign.created_at.date().isoformat(),
+            "amount": round(campaign.budget_monthly, 2),
+            "status": invoice_status,
+        }
+    ]

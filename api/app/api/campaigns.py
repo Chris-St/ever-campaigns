@@ -55,7 +55,7 @@ def create_campaign(
     else:
         campaign.budget_monthly = payload.budget_monthly
         campaign.auto_optimize = payload.auto_optimize
-        if campaign.status == "paused":
+        if campaign.status in {"paused", "paused_manual", "paused_budget", "canceled", "draft"}:
             campaign.status = "pending_payment"
         plaintext_api_key = ensure_campaign_api_key(campaign)
 

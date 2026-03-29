@@ -83,6 +83,8 @@ class Campaign(Base):
     budget_monthly: Mapped[float] = mapped_column(Float)
     budget_spent: Mapped[float] = mapped_column(Float, default=0.0)
     auto_optimize: Mapped[bool] = mapped_column(Boolean, default=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     listener_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
     listener_api_key_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     listener_api_key_last_four: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -104,6 +106,7 @@ class Campaign(Base):
     matches: Mapped[list["Match"]] = relationship(back_populates="campaign")
     clicks: Mapped[list["Click"]] = relationship(back_populates="campaign")
     conversions: Mapped[list["Conversion"]] = relationship(back_populates="campaign")
+    proposals: Mapped[list["Proposal"]] = relationship(back_populates="campaign")
     intent_signals: Mapped[list["IntentSignal"]] = relationship(back_populates="campaign")
     agent_responses: Mapped[list["AgentResponse"]] = relationship(back_populates="campaign")
     agent_events: Mapped[list["AgentEvent"]] = relationship(back_populates="campaign")
@@ -165,12 +168,18 @@ class Click(Base):
         index=True,
         nullable=True,
     )
+    proposal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("proposals.id"),
+        index=True,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     match: Mapped[Match | None] = relationship(back_populates="clicks")
     product: Mapped[Product] = relationship(back_populates="clicks")
     campaign: Mapped[Campaign | None] = relationship(back_populates="clicks")
     response: Mapped[AgentResponse | None] = relationship(back_populates="clicks")
+    proposal: Mapped[Proposal | None] = relationship(back_populates="clicks")
     conversions: Mapped[list["Conversion"]] = relationship(back_populates="click")
 
 
@@ -247,6 +256,41 @@ class AgentResponse(Base):
     campaign: Mapped[Campaign] = relationship(back_populates="agent_responses")
     product: Mapped[Product | None] = relationship()
     clicks: Mapped[list[Click]] = relationship(back_populates="response")
+
+
+class Proposal(Base):
+    __tablename__ = "proposals"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_id)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), index=True, nullable=True)
+    surface: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_author: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_score: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    action_type: Mapped[str] = mapped_column(String, default="other")
+    proposed_response: Mapped[str] = mapped_column(Text)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    referral_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    execution_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="proposed")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    outcome_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    compute_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    campaign: Mapped[Campaign] = relationship(back_populates="proposals")
+    product: Mapped[Product | None] = relationship()
+    clicks: Mapped[list[Click]] = relationship(back_populates="proposal")
 
 
 class AgentEvent(Base):

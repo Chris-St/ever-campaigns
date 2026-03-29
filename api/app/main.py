@@ -14,6 +14,7 @@ from app.api.listener import agent_router as listener_agent_router
 from app.api.listener import router as listener_router
 from app.api.mcp import router as mcp_router
 from app.api.onboarding import router as onboarding_router
+from app.api.proposals import router as proposals_router
 from app.api.products import router as products_router
 from app.api.tracking import router as tracking_router
 from app.core.config import settings
@@ -54,6 +55,7 @@ def root() -> dict[str, str]:
 app.include_router(auth_router)
 app.include_router(onboarding_router)
 app.include_router(campaigns_router)
+app.include_router(proposals_router)
 app.include_router(products_router)
 app.include_router(billing_router)
 app.include_router(tracking_router)

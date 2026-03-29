@@ -55,6 +55,7 @@ export interface BillingSummary {
   mode: string;
   plan_name: string;
   payment_method: string;
+  status?: string | null;
   invoices: BillingInvoice[];
 }
 
@@ -176,8 +177,12 @@ export interface ListenerStatus {
   uptime_hours: number;
   signals_detected_today: number;
   responses_pending_review: number;
+  proposals_pending: number;
   compute_spent_today: number;
   approved_response_count: number;
+  operating_mode: string;
+  manual_execution_required: boolean;
+  approval_required: boolean;
   brand_voice_profile: BrandVoiceProfile;
   brand_context_profile: BrandContextProfile;
   config: ListenerConfig;
@@ -276,6 +281,10 @@ export interface ListenerAnalytics {
   signals_detected: number;
   responses_sent: number;
   responses_pending_review: number;
+  proposals_generated: number;
+  proposals_approved: number;
+  proposals_executed: number;
+  execution_rate: number;
   approval_rate: number;
   response_rate: number;
   clicks: number;
@@ -311,11 +320,27 @@ export interface CampaignOverview {
   conversions: number;
   revenue: number;
   return_on_compute: number;
+  proposals: ProposalStatsSummary;
+  attribution_confidence: AttributionConfidenceSummary;
   compute_series: number[];
   revenue_series: number[];
   alerts: string[];
   billing: BillingSummary;
   agent_endpoints: AgentEndpoints;
+}
+
+export interface ProposalStatsSummary {
+  total: number;
+  pending: number;
+  approved: number;
+  executed: number;
+  rejected: number;
+}
+
+export interface AttributionConfidenceSummary {
+  confirmed: number;
+  estimated: number;
+  unattributed: number;
 }
 
 export interface TimeSeriesPoint {
@@ -354,6 +379,8 @@ export interface ActivityEntry {
   compute_cost?: number;
   expected_impact?: string | null;
   source_url?: string | null;
+  proposal_id?: string | null;
+  proposal_status?: string | null;
 }
 
 export interface CampaignAgentKeyResponse {
@@ -390,5 +417,45 @@ export interface BillingCheckoutResponse {
   campaign_id: string;
   activated: boolean;
   message: string;
+  status?: string | null;
   checkout_url?: string | null;
+  checkout_session_id?: string | null;
+}
+
+export interface ProposalRecord {
+  id: string;
+  campaign_id: string;
+  product_id?: string | null;
+  product_name?: string | null;
+  product_image?: string | null;
+  product_price?: number | null;
+  product_currency?: string | null;
+  surface?: string | null;
+  source_url?: string | null;
+  source_content?: string | null;
+  source_author?: string | null;
+  source_context?: string | null;
+  intent_score: Record<string, number>;
+  action_type: string;
+  proposed_response: string;
+  rationale?: string | null;
+  referral_url?: string | null;
+  execution_instructions?: string | null;
+  status: "proposed" | "approved" | "rejected" | "executed_manually" | "outcome_recorded";
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  rejection_reason?: string | null;
+  executed_at?: string | null;
+  execution_notes?: string | null;
+  outcome?: string | null;
+  outcome_notes?: string | null;
+  outcome_recorded_at?: string | null;
+  tokens_used: number;
+  compute_cost_usd: number;
+  created_at: string;
+  relative_time: string;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  attribution_confidence: "confirmed" | "estimated" | "unattributed";
 }

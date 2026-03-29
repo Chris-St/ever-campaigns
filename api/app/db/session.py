@@ -34,6 +34,8 @@ def ensure_runtime_schema() -> None:
 
     alter_statements = {
         ("merchants", "merchant_slug"): "ALTER TABLE merchants ADD COLUMN merchant_slug VARCHAR",
+        ("campaigns", "stripe_subscription_id"): "ALTER TABLE campaigns ADD COLUMN stripe_subscription_id VARCHAR",
+        ("campaigns", "stripe_checkout_session_id"): "ALTER TABLE campaigns ADD COLUMN stripe_checkout_session_id VARCHAR",
         ("campaigns", "listener_api_key"): "ALTER TABLE campaigns ADD COLUMN listener_api_key VARCHAR",
         ("campaigns", "listener_api_key_hash"): "ALTER TABLE campaigns ADD COLUMN listener_api_key_hash VARCHAR",
         ("campaigns", "listener_api_key_last_four"): "ALTER TABLE campaigns ADD COLUMN listener_api_key_last_four VARCHAR",
@@ -50,6 +52,7 @@ def ensure_runtime_schema() -> None:
         ("clicks", "source"): "ALTER TABLE clicks ADD COLUMN source VARCHAR DEFAULT 'mcp'",
         ("clicks", "surface"): "ALTER TABLE clicks ADD COLUMN surface VARCHAR",
         ("clicks", "response_id"): "ALTER TABLE clicks ADD COLUMN response_id VARCHAR",
+        ("clicks", "proposal_id"): "ALTER TABLE clicks ADD COLUMN proposal_id VARCHAR",
         ("conversions", "channel"): "ALTER TABLE conversions ADD COLUMN channel VARCHAR DEFAULT 'mcp'",
     }
 
@@ -102,6 +105,70 @@ def ensure_runtime_schema() -> None:
                 "created_at",
             }
 
+        if "proposals" not in table_columns:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE proposals (
+                        id VARCHAR PRIMARY KEY,
+                        campaign_id VARCHAR NOT NULL,
+                        product_id VARCHAR,
+                        surface VARCHAR,
+                        source_url TEXT,
+                        source_content TEXT,
+                        source_author VARCHAR,
+                        source_context TEXT,
+                        intent_score JSON,
+                        action_type VARCHAR DEFAULT 'other',
+                        proposed_response TEXT NOT NULL,
+                        rationale TEXT,
+                        referral_url TEXT,
+                        execution_instructions TEXT,
+                        status VARCHAR DEFAULT 'proposed',
+                        approved_at DATETIME,
+                        rejected_at DATETIME,
+                        rejection_reason TEXT,
+                        executed_at DATETIME,
+                        execution_notes TEXT,
+                        outcome VARCHAR,
+                        outcome_notes TEXT,
+                        outcome_recorded_at DATETIME,
+                        tokens_used INTEGER DEFAULT 0,
+                        compute_cost_usd FLOAT DEFAULT 0,
+                        created_at DATETIME
+                    )
+                    """
+                )
+            )
+            table_columns["proposals"] = {
+                "id",
+                "campaign_id",
+                "product_id",
+                "surface",
+                "source_url",
+                "source_content",
+                "source_author",
+                "source_context",
+                "intent_score",
+                "action_type",
+                "proposed_response",
+                "rationale",
+                "referral_url",
+                "execution_instructions",
+                "status",
+                "approved_at",
+                "rejected_at",
+                "rejection_reason",
+                "executed_at",
+                "execution_notes",
+                "outcome",
+                "outcome_notes",
+                "outcome_recorded_at",
+                "tokens_used",
+                "compute_cost_usd",
+                "created_at",
+            }
+
         for (table_name, column_name), statement in alter_statements.items():
             if table_name in table_columns and column_name not in table_columns[table_name]:
                 connection.execute(text(statement))
@@ -126,6 +193,11 @@ def ensure_runtime_schema() -> None:
                 text("UPDATE campaigns SET listener_status = 'stopped' WHERE listener_status IS NULL")
             )
             connection.execute(
+                text(
+                    "UPDATE campaigns SET status = 'paused_manual' WHERE status = 'paused'"
+                )
+            )
+            connection.execute(
                 text("UPDATE campaigns SET approved_response_count = 0 WHERE approved_response_count IS NULL")
             )
             connection.execute(
@@ -137,6 +209,11 @@ def ensure_runtime_schema() -> None:
             connection.execute(
                 text("UPDATE campaigns SET listener_config = '{}' WHERE listener_config IS NULL")
             )
+
+        if "proposals" in table_columns or "proposals" in inspector.get_table_names():
+            connection.execute(text("UPDATE proposals SET intent_score = '{}' WHERE intent_score IS NULL"))
+            connection.execute(text("UPDATE proposals SET status = 'proposed' WHERE status IS NULL"))
+            connection.execute(text("UPDATE proposals SET action_type = 'other' WHERE action_type IS NULL"))
 
     backfill_merchant_slugs()
 

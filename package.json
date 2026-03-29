@@ -3,10 +3,10 @@
   "private": true,
   "scripts": {
     "dev:web": "npm run dev --prefix web",
-    "dev:api": "cd api && (python3.10 -c \"import fastapi\" >/dev/null 2>&1 || python3.10 -m pip install -r requirements.txt) && python3.10 -m uvicorn app.main:app --reload",
+    "dev:api": "cd api && (python3.10 -c \"import fastapi, stripe\" >/dev/null 2>&1 || python3.10 -m pip install -r requirements.txt) && python3.10 -m uvicorn app.main:app --reload",
     "lint:web": "npm run lint --prefix web",
     "build:web": "npm run build --prefix web",
-    "test:api": "cd api && (python3.10 -c \"import pytest\" >/dev/null 2>&1 || python3.10 -m pip install -r requirements.txt) && python3.10 -m pytest -q",
+    "test:api": "cd api && (python3.10 -c \"import pytest, stripe\" >/dev/null 2>&1 || python3.10 -m pip install -r requirements.txt) && python3.10 -m pytest -q",
     "check": "npm run lint:web && npm run build:web && npm run test:api"
   }
 }

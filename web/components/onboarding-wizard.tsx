@@ -1,8 +1,8 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Logo } from "@/components/logo";
 import { useAuth } from "@/components/auth-provider";
@@ -37,6 +37,7 @@ const aggressivenessProfiles = {
 
 export function OnboardingWizard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { token, loading, refreshUser } = useAuth();
   const [step, setStep] = useState(1);
   const [storeUrl, setStoreUrl] = useState("https://biaundies.com");
@@ -50,6 +51,7 @@ export function OnboardingWizard() {
   const [brandContext, setBrandContext] = useState<BrandContextProfile | null>(null);
   const [aggressiveness, setAggressiveness] =
     useState<ListenerStatus["config"]["aggressiveness"]>("balanced");
+  const [chargeConfirmed, setChargeConfirmed] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -97,6 +99,87 @@ export function OnboardingWizard() {
   ) {
     setBrandContext((current) => (current ? { ...current, [key]: value } : current));
   }
+
+  const hydrateActivatedCampaign = useCallback(
+    async (activeCampaignId: string, resolvedToken: string) => {
+      const liveCampaign = await apiRequest<CampaignOverview>(`/campaigns/${activeCampaignId}`, {
+        method: "GET",
+        token: resolvedToken,
+      });
+      const nextListenerStatus = await apiRequest<ListenerStatus>(`/campaigns/${activeCampaignId}/listener/status`, {
+        method: "GET",
+        token: resolvedToken,
+      });
+      setCampaign(liveCampaign);
+      setActiveCampaignId(liveCampaign.id);
+      setListenerStatus(nextListenerStatus);
+      setBrandVoice(nextListenerStatus.brand_voice_profile);
+      setBrandContext(nextListenerStatus.brand_context_profile);
+      setAggressiveness(nextListenerStatus.config.aggressiveness);
+      await refreshUser(resolvedToken);
+      setStep(5);
+    },
+    [refreshUser],
+  );
+
+  useEffect(() => {
+    if (loading || !token) {
+      return;
+    }
+    const checkoutState = searchParams.get("checkout");
+    const returnCampaignId = searchParams.get("campaign_id");
+    if (!checkoutState || !returnCampaignId) {
+      return;
+    }
+    const campaignId = returnCampaignId as string;
+    const authToken = token as string;
+    if (checkoutState === "cancel") {
+      setStep(4);
+      setError("Stripe checkout was canceled before the experiment was funded.");
+      return;
+    }
+
+    let cancelled = false;
+    async function finalizeCheckout() {
+      setBusyLabel("Finalizing payment...");
+      setError(null);
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const liveCampaign = await apiRequest<CampaignOverview>(`/campaigns/${campaignId}`, {
+          method: "GET",
+          token: authToken,
+        });
+        if (cancelled) {
+          return;
+        }
+        if (liveCampaign.status === "active") {
+          setCheckoutResponse({
+            mode: liveCampaign.billing.mode,
+            campaign_id: liveCampaign.id,
+            activated: true,
+            status: liveCampaign.status,
+            message: "Stripe confirmed payment. Your paid experiment is ready to launch.",
+          });
+          await hydrateActivatedCampaign(campaignId, authToken);
+          router.replace("/onboarding");
+          setBusyLabel(null);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+      if (!cancelled) {
+        setStep(4);
+        setBusyLabel(null);
+        setError(
+          "Stripe checkout completed, but Ever is still waiting on webhook confirmation. Keep Stripe CLI forwarding webhooks to localhost and refresh once.",
+        );
+      }
+    }
+
+    void finalizeCheckout();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateActivatedCampaign, loading, router, searchParams, token]);
 
   async function handleScanStore() {
     if (!token) {
@@ -180,22 +263,11 @@ export function OnboardingWizard() {
         token,
         body: { campaign_id: campaign.id },
       });
-      const liveCampaign = await apiRequest<CampaignOverview>(`/campaigns/${campaign.id}`, {
-        method: "GET",
-        token,
-      });
-      const nextListenerStatus = await apiRequest<ListenerStatus>(`/campaigns/${campaign.id}/listener/status`, {
-        method: "GET",
-        token,
-      });
       setCheckoutResponse(response);
-      setCampaign(liveCampaign);
-      setListenerStatus(nextListenerStatus);
-      setBrandVoice(nextListenerStatus.brand_voice_profile);
-      setBrandContext(nextListenerStatus.brand_context_profile);
-      setAggressiveness(nextListenerStatus.config.aggressiveness);
-      await refreshUser(token);
-      setStep(5);
+      if (!response.checkout_url) {
+        throw new Error("Stripe did not return a checkout URL.");
+      }
+      window.location.href = response.checkout_url;
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to activate campaign.");
     } finally {
@@ -219,6 +291,8 @@ export function OnboardingWizard() {
           brand_context_profile: brandContext,
           config: {
             ...listenerStatus.config,
+            listener_mode: "live",
+            review_mode: "manual",
             aggressiveness,
             max_actions_per_day: profile.max_actions_per_day,
             quality_threshold: profile.quality_threshold,
@@ -254,8 +328,6 @@ export function OnboardingWizard() {
   const estimatedInteractions = Math.round(budget / 3.5);
   const estimatedConversions = Math.max(Math.round(budget / 22), 3);
   const estimatedRoc = 1.8 + budget / 450;
-  const currentProfile = aggressivenessProfiles[aggressiveness];
-
   return (
     <div className="min-h-screen">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-8 lg:px-10">
@@ -328,7 +400,8 @@ export function OnboardingWizard() {
                   {[
                     "You set products, brand voice, and compute budget.",
                     "The agent decides channels, tactics, timing, and copy.",
-                    "Every action is reported back into the dashboard.",
+                    "It drafts proposals instead of posting directly.",
+                    "You approve and execute the best ones manually.",
                     "RoC is the single scorecard.",
                   ].map((item) => (
                     <div key={item} className="rounded-[1.3rem] border border-white/8 bg-white/4 p-4 text-sm leading-7 text-slate-300">
@@ -494,18 +567,33 @@ export function OnboardingWizard() {
                 <p className="eyebrow">Step 4</p>
                 <h2 className="font-display text-3xl text-white">Activate the compute budget</h2>
                 <p className="text-sm leading-7 text-slate-400">
-                  Billing is demo-mode locally, but this step keeps the launch flow true to the product.
+                  This starts a real paid experiment in Stripe test mode first, then live mode when you are ready.
                 </p>
                 <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5">
                   <p className="text-sm text-slate-300">Monthly compute budget</p>
                   <p className="mt-3 font-display text-5xl text-white">{formatCurrency(budget)}</p>
+                  <div className="mt-5 space-y-3 rounded-[1.3rem] border border-amber-400/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+                    <p>You are about to start a real paid experiment.</p>
+                    <p>Budget: {formatCurrency(budget)}</p>
+                    <p>All agent actions require your approval before execution.</p>
+                    <p>You can pause or cancel at any time.</p>
+                  </div>
+                  <label className="mt-5 flex items-start gap-3 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={chargeConfirmed}
+                      onChange={(event) => setChargeConfirmed(event.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-white/10 bg-slate-950/70 text-emerald-400"
+                    />
+                    <span>I understand this is a real charge.</span>
+                  </label>
                 </div>
                 <button
                   onClick={() => void handleActivateCampaign()}
-                  disabled={Boolean(busyLabel)}
+                  disabled={Boolean(busyLabel) || !chargeConfirmed}
                   className="rounded-full bg-emerald-400 px-6 py-4 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {busyLabel ?? "Activate campaign"}
+                  {busyLabel ?? `Start Experiment — ${formatCurrency(budget)}`}
                 </button>
               </div>
 
@@ -513,9 +601,9 @@ export function OnboardingWizard() {
                 <p className="eyebrow">What happens next</p>
                 <div className="mt-5 space-y-4">
                   {[
-                    "Ever generates the autonomous agent runtime config.",
-                    "You review the brand identity and action posture once.",
-                    "The agent launches and starts reporting every action back into the dashboard.",
+                    "Ever creates a Stripe Checkout session for this budget.",
+                    "After payment confirmation, the campaign becomes active.",
+                    "You review the agent brain and launch a propose-only operator workflow.",
                   ].map((item) => (
                     <div key={item} className="rounded-[1.3rem] border border-white/8 bg-white/4 p-4 text-sm leading-7 text-slate-300">
                       {item}
@@ -536,7 +624,7 @@ export function OnboardingWizard() {
                 <h2 className="font-display text-3xl text-white">Review your agent</h2>
                 <p className="max-w-3xl text-sm leading-7 text-slate-400">
                   The agent now has a catalog, a compute budget, a brand identity, and an agent
-                  brain. Dump as much useful context here as you want before the first experiment.
+                  brain. Dump as much useful context here as you want before the first paid experiment.
                 </p>
               </div>
 
@@ -709,13 +797,13 @@ export function OnboardingWizard() {
                       <div className="rounded-[1.2rem] border border-white/8 bg-white/4 p-4">
                         <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Mode</p>
                         <p className="mt-2 font-display text-3xl text-white">
-                          {listenerStatus?.config.listener_mode ?? "simulation"}
+                          propose-only
                         </p>
                       </div>
                       <div className="rounded-[1.2rem] border border-white/8 bg-white/4 p-4">
-                        <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Daily cap</p>
+                        <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Approval</p>
                         <p className="mt-2 font-display text-3xl text-white">
-                          {formatNumber(currentProfile.max_actions_per_day)}
+                          manual
                         </p>
                       </div>
                     </div>
@@ -723,14 +811,14 @@ export function OnboardingWizard() {
 
                   <div className="rounded-[1.6rem] border border-white/8 bg-white/4 p-5">
                     <p className="text-sm leading-7 text-slate-300">
-                      Your autonomous agent will use this identity and these products to find and convert customers. It will decide which channels and tactics work best, then report every action back into Ever.
+                      Your agent will use this identity and these products to find and draft opportunities. It will decide which channels and tactics look strongest, but every outward action will wait for your approval and manual execution.
                     </p>
                     <button
                       onClick={() => void handleLaunchAgent()}
                       disabled={Boolean(busyLabel)}
                       className="mt-5 rounded-full bg-emerald-400 px-6 py-4 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-70"
                     >
-                      {busyLabel ?? "Launch agent"}
+                      {busyLabel ?? "Launch propose-only agent"}
                     </button>
                   </div>
                 </div>

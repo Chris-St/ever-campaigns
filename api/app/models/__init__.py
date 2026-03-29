@@ -1,4 +1,4 @@
-from app.models.entities import Campaign, Click, Conversion, Match, Merchant, Product, Query, User
+from app.models.entities import Campaign, Click, Conversion, Match, Merchant, Product, Proposal, Query, User
 
 __all__ = [
     "Campaign",
@@ -7,6 +7,7 @@ __all__ = [
     "Match",
     "Merchant",
     "Product",
+    "Proposal",
     "Query",
     "User",
 ]

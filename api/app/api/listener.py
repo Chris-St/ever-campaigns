@@ -53,7 +53,10 @@ def start_campaign_listener(
     campaign = load_listener_campaign(db, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    return ListenerStatus.model_validate(start_listener(db, campaign))
+    try:
+        return ListenerStatus.model_validate(start_listener(db, campaign))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{campaign_id}/listener/stop", response_model=ListenerStatus)
@@ -191,5 +194,8 @@ def post_campaign_agent_event(
     campaign: Campaign = Depends(get_campaign_by_api_key),
     db: Session = Depends(get_db),
 ) -> AgentEventResponse:
-    result = record_agent_event(db, campaign, payload.model_dump())
-    return AgentEventResponse.model_validate(result)
+    try:
+        result = record_agent_event(db, campaign, payload.model_dump())
+        return AgentEventResponse.model_validate(result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

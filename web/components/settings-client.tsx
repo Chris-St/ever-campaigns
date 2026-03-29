@@ -24,7 +24,9 @@ export function SettingsClient() {
   const [campaign, setCampaign] = useState<CampaignOverview | null>(null);
   const [listenerStatus, setListenerStatus] = useState<ListenerStatus | null>(null);
   const [budget, setBudget] = useState(2400);
-  const [status, setStatus] = useState<"active" | "paused" | "pending_payment" | "draft">("active");
+  const [status, setStatus] = useState<
+    "active" | "pending_payment" | "paused_budget" | "paused_manual" | "canceled" | "draft"
+  >("active");
   const [listenerMode, setListenerMode] = useState<ListenerStatus["config"]["listener_mode"]>("simulation");
   const [listenerAggressiveness, setListenerAggressiveness] =
     useState<ListenerStatus["config"]["aggressiveness"]>("balanced");
@@ -70,7 +72,15 @@ export function SettingsClient() {
       ]);
       setCampaign(response);
       setBudget(response.budget_monthly);
-      setStatus(response.status as "active" | "paused" | "pending_payment" | "draft");
+      setStatus(
+        response.status as
+          | "active"
+          | "pending_payment"
+          | "paused_budget"
+          | "paused_manual"
+          | "canceled"
+          | "draft",
+      );
       setListenerStatus(nextListenerStatus);
       setListenerMode(nextListenerStatus.config.listener_mode);
       setListenerAggressiveness(nextListenerStatus.config.aggressiveness);
@@ -230,13 +240,23 @@ export function SettingsClient() {
                   <select
                     value={status}
                     onChange={(event) =>
-                      setStatus(event.target.value as "active" | "paused" | "pending_payment" | "draft")
+                      setStatus(
+                        event.target.value as
+                          | "active"
+                          | "pending_payment"
+                          | "paused_budget"
+                          | "paused_manual"
+                          | "canceled"
+                          | "draft",
+                      )
                     }
                     className="mt-3 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
                   >
                     <option value="active">Active</option>
-                    <option value="paused">Paused</option>
                     <option value="pending_payment">Pending payment</option>
+                    <option value="paused_manual">Paused manually</option>
+                    <option value="paused_budget">Paused by budget</option>
+                    <option value="canceled">Canceled</option>
                     <option value="draft">Draft</option>
                   </select>
                 </label>
@@ -276,6 +296,12 @@ export function SettingsClient() {
                   >
                     {listenerStatus.status === "running" ? "Stop agent" : "Launch agent"}
                   </button>
+                  <Link
+                    href="/proposals"
+                    className="rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10"
+                  >
+                    Open proposals
+                  </Link>
                 </div>
               </div>
 
@@ -294,8 +320,7 @@ export function SettingsClient() {
                       <option value="live">Live OpenClaw agent</option>
                     </select>
                     <p className="mt-3 text-sm leading-7 text-slate-400">
-                      Simulation keeps the demo data flowing. Live mode waits for a real autonomous
-                      agent to fetch config and report actions back into Ever.
+                      Simulation keeps the demo data flowing. Live mode launches the local propose-only runtime so every outbound action lands in the operator queue first.
                     </p>
                   </label>
 
@@ -315,7 +340,7 @@ export function SettingsClient() {
                       <option value="aggressive">Aggressive</option>
                     </select>
                     <p className="mt-3 text-sm leading-7 text-slate-400">
-                      Current limit: {formatNumber(profile.max_actions_per_day)} actions/day.
+                      Current limit: {formatNumber(profile.max_actions_per_day)} proposals/day.
                     </p>
                   </label>
                 </div>

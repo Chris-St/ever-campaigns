@@ -21,9 +21,15 @@ from app.models.entities import (
     Conversion,
     IntentSignal,
     Merchant,
+    Proposal,
     Product,
 )
 from app.services.openclaw_runtime import launch_openclaw_agent, stop_openclaw_agent
+from app.services.proposals import (
+    build_proposal_stats,
+    create_proposal_from_event,
+    update_campaign_budget_state,
+)
 
 
 def utcnow() -> datetime:
@@ -507,9 +513,9 @@ def budget_remaining(campaign: Campaign) -> float:
 
 
 def effective_listener_status(campaign: Campaign) -> str:
-    if campaign.status == "paused":
+    if campaign.status in {"paused", "paused_manual", "canceled"}:
         return "paused"
-    if budget_remaining(campaign) <= 0:
+    if campaign.status == "paused_budget" or budget_remaining(campaign) <= 0:
         return "budget_exhausted"
     return campaign.listener_status or "stopped"
 
@@ -987,6 +993,9 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
         "campaign_id": campaign.id,
         "status": live_status,
         "campaign_status": campaign.status,
+        "operating_mode": "propose_only",
+        "manual_execution_required": True,
+        "approval_required": True,
         "brand": {
             "name": profile.get("brand_name") or campaign.merchant.name or "Brand",
             "domain": campaign.merchant.domain,
@@ -1523,15 +1532,27 @@ def record_agent_event(
             "listener_mode": "live",
         }
     created_at = parse_event_timestamp(payload["timestamp"])
+    if payload.get("event_type") == "proposal":
+        try:
+            proposal = create_proposal_from_event(db, campaign, payload, created_at)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        campaign.listener_last_polled_at = utcnow()
+        if campaign.status == "active" and campaign.listener_status != "budget_exhausted":
+            campaign.listener_status = "running"
+        db.commit()
+        db.refresh(campaign)
+        budget_left = budget_remaining(campaign)
+        return {
+            "event_id": proposal.id,
+            "proposal_id": proposal.id,
+            "status": proposal.status,
+            "budget_remaining": budget_left,
+            "budget_exhausted": budget_left <= 0,
+        }
+
     event = persist_agent_event(db, campaign, payload, created_at)
-    campaign.budget_spent = round(
-        sum(
-            db.scalars(
-                select(AgentEvent.compute_cost_usd).where(AgentEvent.campaign_id == campaign.id)
-            ).all()
-        ),
-        2,
-    )
+    update_campaign_budget_state(db, campaign)
     campaign.listener_last_polled_at = utcnow()
     next_status = effective_listener_status(campaign)
     campaign.listener_status = "running" if next_status == "running" else next_status
@@ -1654,6 +1675,18 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
             AgentEvent.created_at >= today_start,
         )
     ).all()
+    proposals_today = db.scalars(
+        select(Proposal).where(
+            Proposal.campaign_id == campaign.id,
+            Proposal.created_at >= today_start,
+        )
+    ).all()
+    pending_proposals = db.scalars(
+        select(Proposal).where(
+            Proposal.campaign_id == campaign.id,
+            Proposal.status == "proposed",
+        )
+    ).all()
     pending_responses = db.scalars(
         select(AgentResponse).where(
             AgentResponse.campaign_id == campaign.id,
@@ -1667,16 +1700,31 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
         for event in actions_today
         if event.category in {"engagement", "outreach"} and (event.response_text or event.referral_url)
     ]
-    compute_spent_today = round(sum(event.compute_cost_usd for event in events_today), 2)
-    active_surfaces = sorted({event.surface for event in events_today if event.surface})
+    compute_spent_today = round(
+        sum(event.compute_cost_usd for event in events_today)
+        + sum(proposal.compute_cost_usd for proposal in proposals_today),
+        2,
+    )
+    active_surfaces = sorted(
+        {
+            *(event.surface for event in events_today if event.surface),
+            *(proposal.surface for proposal in proposals_today if proposal.surface),
+        }
+    )
     latest_event = db.scalar(
         select(AgentEvent.created_at)
         .where(AgentEvent.campaign_id == campaign.id)
         .order_by(AgentEvent.created_at.desc())
         .limit(1)
     )
+    latest_proposal = db.scalar(
+        select(Proposal.created_at)
+        .where(Proposal.campaign_id == campaign.id)
+        .order_by(Proposal.created_at.desc())
+        .limit(1)
+    )
     last_active = max(
-        [value for value in [campaign.listener_last_polled_at, latest_event] if value is not None],
+        [value for value in [campaign.listener_last_polled_at, latest_event, latest_proposal] if value is not None],
         default=None,
     )
     current_status = effective_listener_status(campaign)
@@ -1696,14 +1744,18 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
         "active_surface_count": len(active_surfaces),
         "surfaces_active": active_surfaces,
         "surfaces_active_count": len(active_surfaces),
-        "signals_today": len(actions_today),
+        "signals_today": len(actions_today) + len(proposals_today),
         "responses_today": len(response_like_actions),
         "budget_remaining": budget_remaining(campaign),
         "uptime_hours": uptime_hours,
-        "signals_detected_today": len(actions_today),
+        "signals_detected_today": len(actions_today) + len(proposals_today),
         "responses_pending_review": len(pending_responses),
+        "proposals_pending": len(pending_proposals),
         "compute_spent_today": compute_spent_today,
         "approved_response_count": campaign.approved_response_count,
+        "operating_mode": "propose_only",
+        "manual_execution_required": True,
+        "approval_required": True,
         "brand_voice_profile": campaign.brand_voice_profile,
         "brand_context_profile": campaign.brand_context_profile,
         "config": campaign.listener_config,
@@ -1712,6 +1764,13 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
 
 def start_listener(db: Session, campaign: Campaign) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
+    if campaign.status in {"paused_budget"} or budget_remaining(campaign) <= 0:
+        campaign.listener_status = "budget_exhausted"
+        db.commit()
+        db.refresh(campaign)
+        return build_listener_status(db, campaign, refresh=False)
+    if campaign.status not in {"active"} and listener_mode(campaign) == "live":
+        raise ValueError("Campaign must be paid and active before launching the live agent.")
     campaign.listener_status = "running"
     campaign.listener_started_at = campaign.listener_started_at or utcnow()
     if listener_mode(campaign) == "live":
@@ -1855,12 +1914,18 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         .options(joinedload(AgentEvent.product))
         .order_by(AgentEvent.created_at.asc())
     ).all()
+    proposals = db.scalars(
+        select(Proposal)
+        .where(Proposal.campaign_id == campaign.id, Proposal.created_at >= start_at)
+        .options(joinedload(Proposal.product))
+        .order_by(Proposal.created_at.asc())
+    ).all()
     clicks = db.scalars(
         select(Click)
         .where(
             Click.campaign_id == campaign.id,
             Click.created_at >= start_at,
-            Click.source.in_(["autonomous_agent", "intent_listener"]),
+            Click.source.in_(["proposal", "autonomous_agent", "intent_listener"]),
         )
         .options(joinedload(Click.product))
     ).all()
@@ -1869,7 +1934,7 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         .where(
             Conversion.campaign_id == campaign.id,
             Conversion.created_at >= start_at,
-            Conversion.channel.in_(["autonomous_agent", "intent_listener"]),
+            Conversion.channel.in_(["proposal", "autonomous_agent", "intent_listener"]),
         )
         .options(joinedload(Conversion.product), joinedload(Conversion.click))
     ).all()
@@ -1885,8 +1950,14 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
     response_actions = [
         event for event in action_events if event.category in {"engagement", "outreach"}
     ]
+    approved_proposals = [proposal for proposal in proposals if proposal.approved_at is not None]
+    executed_proposals = [proposal for proposal in proposals if proposal.executed_at is not None]
     revenue = round(sum(conversion.order_value for conversion in conversions), 2)
-    compute_cost = round(sum(event.compute_cost_usd for event in events), 2)
+    compute_cost = round(
+        sum(event.compute_cost_usd for event in events)
+        + sum(proposal.compute_cost_usd for proposal in proposals),
+        2,
+    )
     roc = round(revenue / compute_cost, 2) if compute_cost else 0.0
 
     surface_stats: dict[str, dict[str, float | int | str | None]] = defaultdict(
@@ -1958,6 +2029,33 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             if event.category in {"engagement", "outreach"}:
                 product_row["responses_sent"] += 1
             product_row["compute_cost"] += event.compute_cost_usd
+
+    for proposal in proposals:
+        surface = proposal.surface or "other"
+        surface_row = surface_stats[surface]
+        surface_row["surface"] = surface
+        surface_row["subreddit_or_channel"] = surface
+        surface_row["signals_detected"] += 1
+        surface_row["responses"] += 1
+        if proposal.approved_at is not None:
+            surface_row["responses_sent"] += 1
+        surface_row["compute_cost"] += proposal.compute_cost_usd
+
+        channel_row = channel_breakdown[surface]
+        channel_row["surface"] = surface
+        channel_row["actions"] += 1
+        channel_row["compute_cost"] += proposal.compute_cost_usd
+
+        if proposal.product_id:
+            product_row = product_stats[proposal.product_id]
+            product_row["product_id"] = proposal.product_id
+            product_row["name"] = proposal.product.name if proposal.product else "Product"
+            product_row["product_name"] = proposal.product.name if proposal.product else "Product"
+            product_row["surface"] = surface
+            product_row["responses"] += 1
+            if proposal.approved_at is not None:
+                product_row["responses_sent"] += 1
+            product_row["compute_cost"] += proposal.compute_cost_usd
 
     for click in clicks:
         surface = click.surface or "other"
@@ -2039,6 +2137,14 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         if event.category in {"engagement", "outreach"}:
             daily_map[key]["responses_sent"] += 1
         daily_map[key]["compute_cost"] += event.compute_cost_usd
+    for proposal in proposals:
+        key = ensure_utc(proposal.created_at).date().isoformat()
+        daily_map[key]["date"] = key
+        daily_map[key]["actions_reported"] += 1
+        daily_map[key]["signals_detected"] += 1
+        if proposal.approved_at is not None:
+            daily_map[key]["responses_sent"] += 1
+        daily_map[key]["compute_cost"] += proposal.compute_cost_usd
     for event in strategy_events:
         key = ensure_utc(event.created_at).date().isoformat()
         daily_map[key]["date"] = key
@@ -2062,17 +2168,30 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         point["compute_cost"] = round(float(point["compute_cost"]), 2)
         daily.append(point.copy())
 
+    proposal_stats = {
+        "total": len(proposals),
+        "approved": len(approved_proposals),
+        "executed": len(executed_proposals),
+    }
     return {
         "period": period,
-        "actions_reported": len(action_events),
+        "actions_reported": len(action_events) + len(proposals),
         "strategy_updates": len(strategy_events),
-        "signals_detected": len(action_events),
-        "responses_sent": len(response_actions),
+        "signals_detected": len(action_events) + len(proposals),
+        "responses_sent": len(response_actions) + len(approved_proposals),
         "responses_pending_review": len(pending_responses),
-        "approval_rate": 1.0,
-        "response_rate": round(len(response_actions) / len(action_events), 4) if action_events else 0.0,
+        "proposals_generated": proposal_stats["total"],
+        "proposals_approved": proposal_stats["approved"],
+        "proposals_executed": proposal_stats["executed"],
+        "execution_rate": round(proposal_stats["executed"] / proposal_stats["approved"], 4)
+        if proposal_stats["approved"]
+        else 0.0,
+        "approval_rate": round(proposal_stats["approved"] / proposal_stats["total"], 4)
+        if proposal_stats["total"]
+        else 0.0,
+        "response_rate": round(len(approved_proposals) / len(proposals), 4) if proposals else 0.0,
         "clicks": len(clicks),
-        "click_through_rate": round(len(clicks) / len(response_actions), 4) if response_actions else 0.0,
+        "click_through_rate": round(len(clicks) / len(executed_proposals), 4) if executed_proposals else 0.0,
         "conversions": len(conversions),
         "conversion_rate": round(len(conversions) / len(clicks), 4) if clicks else 0.0,
         "revenue": revenue,

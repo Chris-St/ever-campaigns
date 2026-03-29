@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db
-from app.models.entities import AgentEvent, AgentResponse, Click, Conversion, Match, Product
+from app.models.entities import AgentEvent, AgentResponse, Click, Conversion, Match, Product, Proposal
 from app.schemas.contracts import ShopifyOrderWebhook
 
 
@@ -21,13 +21,29 @@ def redirect_to_product(
     q: str | None = None,
     src: str | None = None,
     iid: str | None = None,
+    pid: str | None = None,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     product = db.scalar(select(Product).where(Product.id == product_id))
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    if iid:
+    if pid:
+        proposal = db.scalar(select(Proposal).where(Proposal.id == pid))
+        if proposal is not None:
+            click = Click(
+                match_id=None,
+                product_id=product_id,
+                campaign_id=proposal.campaign_id,
+                channel="proposal",
+                source="proposal",
+                surface=src or proposal.surface,
+                proposal_id=proposal.id,
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(click)
+            db.commit()
+    elif iid:
         response = db.scalar(select(AgentResponse).where(AgentResponse.id == iid))
         if response is not None:
             click = Click(
@@ -96,6 +112,14 @@ def shopify_order_webhook(
             .order_by(Click.created_at.desc())
         )
     if click is None:
+        if payload.proposal_id:
+            click = db.scalar(
+                select(Click)
+                .where(Click.proposal_id == payload.proposal_id)
+                .options(joinedload(Click.proposal))
+                .order_by(Click.created_at.desc())
+            )
+    if click is None:
         candidate_clicks = db.scalars(
             select(Click)
             .where(Click.product_id == payload.product_id, Click.campaign_id == payload.campaign_id)
@@ -105,7 +129,8 @@ def shopify_order_webhook(
             click = max(
                 candidate_clicks,
                 key=lambda candidate: (
-                    candidate.source in {"intent_listener", "autonomous_agent"},
+                    candidate.proposal_id is not None,
+                    candidate.source in {"proposal", "intent_listener", "autonomous_agent"},
                     candidate.created_at,
                 ),
             )

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -28,7 +29,7 @@ import type {
 } from "@/lib/types";
 
 type Period = "7d" | "30d" | "90d" | "all";
-type FeedFilter = "all" | "action" | "strategy" | "click" | "conversion" | "match";
+type FeedFilter = "all" | "proposal" | "action" | "strategy" | "click" | "conversion" | "match";
 
 function activityTone(category?: string | null) {
   switch (category) {
@@ -42,6 +43,8 @@ function activityTone(category?: string | null) {
       return "border-white/10 bg-white/6 text-slate-200";
     case "strategy":
       return "border-amber-400/20 bg-amber-500/10 text-amber-100";
+    case "proposal":
+      return "border-blue-400/20 bg-blue-500/10 text-blue-100";
     case "conversion":
       return "border-emerald-400/20 bg-emerald-500/10 text-emerald-100";
     default:
@@ -214,8 +217,8 @@ export function DashboardClient() {
   return (
     <div className="min-h-screen">
       <AppHeader
-        title="Autonomous Agent"
-        subtitle="Give the agent a catalog, a brand identity, and a compute budget. Ever tracks what it tries, where it goes, and whether the strategy is producing Return on Compute."
+        title="Paid Experiment Dashboard"
+        subtitle="The agent discovers opportunities and drafts proposals. You approve, execute, and record outcomes. Ever tracks whether that loop is producing Return on Compute."
       />
 
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-5 py-6 sm:px-8 lg:px-10">
@@ -225,7 +228,7 @@ export function DashboardClient() {
           </div>
         ) : null}
 
-        <div className="grid gap-4 xl:grid-cols-4">
+        <div className="grid gap-4 xl:grid-cols-5">
           <DashboardMetricCard
             label="Compute Spent"
             value={overview.compute_spent}
@@ -236,10 +239,17 @@ export function DashboardClient() {
             progress={overview.budget_utilization}
           />
           <DashboardMetricCard
+            label="Pending Proposals"
+            value={overview.proposals.pending}
+            accentClass="bg-blue-400/10 text-blue-100"
+            caption={`${formatNumber(overview.proposals.total)} total proposals generated`}
+            sparkline={listenerAnalytics.daily_series.map((point) => point.actions_reported)}
+          />
+          <DashboardMetricCard
             label="Conversions"
             value={overview.conversions}
             accentClass="bg-blue-400/10 text-blue-100"
-            caption="Attributed purchases from autonomous activity and MCP traffic"
+            caption="Attributed purchases tied back to proposals or tracked links"
             sparkline={conversionSparkline}
           />
           <DashboardMetricCard
@@ -267,7 +277,7 @@ export function DashboardClient() {
               <h2 className="font-display text-2xl text-white">What the agent is actually doing</h2>
               <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">
                 Ever no longer assumes fixed channels. The agent decides where to spend compute,
-                reports every action, and the dashboard groups the resulting activity dynamically.
+                reports opportunities as proposals, and waits for your approval before anything goes live.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -285,21 +295,27 @@ export function DashboardClient() {
                   onClick={() => void handleStartAgent()}
                   className="rounded-full bg-emerald-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300"
                 >
-                  Launch agent
+                  Launch propose-only agent
                 </button>
               ) : null}
               <span className="rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs uppercase tracking-[0.22em] text-slate-300">
-                {formatNumber(listenerStatus.active_surface_count)} active surfaces
+                approval required
               </span>
+              <Link
+                href="/proposals"
+                className="rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10"
+              >
+                Open proposals
+              </Link>
             </div>
           </div>
 
-          <div className="mt-6 grid gap-4 xl:grid-cols-4">
+          <div className="mt-6 grid gap-4 xl:grid-cols-5">
             <DashboardMetricCard
-              label="Actions Logged"
-              value={listenerAnalytics.actions_reported}
+              label="Proposals Generated"
+              value={listenerAnalytics.proposals_generated}
               accentClass="bg-blue-400/10 text-blue-100"
-              caption={`${formatNumber(listenerStatus.actions_today)} actions reported today`}
+              caption={`${formatNumber(listenerStatus.proposals_pending)} waiting in the queue`}
               sparkline={actionSparkline}
             />
             <DashboardMetricCard
@@ -310,13 +326,23 @@ export function DashboardClient() {
               sparkline={strategySparkline}
             />
             <DashboardMetricCard
-              label="Agent CTR"
-              value={listenerAnalytics.click_through_rate}
+              label="Approval Rate"
+              value={listenerAnalytics.approval_rate}
               format="percent"
               accentClass="bg-blue-400/10 text-blue-100"
-              caption={`${formatNumber(listenerAnalytics.clicks)} clicks from ${formatNumber(listenerAnalytics.responses_sent)} tracked engagement actions`}
+              caption={`${formatNumber(listenerAnalytics.proposals_approved)} approved from ${formatNumber(listenerAnalytics.proposals_generated)} proposals`}
               sparkline={listenerAnalytics.daily_series.map((point) =>
-                point.actions_reported > 0 ? point.clicks / point.actions_reported : 0,
+                point.actions_reported > 0 ? point.responses_sent / point.actions_reported : 0,
+              )}
+            />
+            <DashboardMetricCard
+              label="Execution Rate"
+              value={listenerAnalytics.execution_rate}
+              format="percent"
+              accentClass="bg-amber-400/10 text-amber-100"
+              caption={`${formatNumber(listenerAnalytics.proposals_executed)} executed manually`}
+              sparkline={listenerAnalytics.daily_series.map((point) =>
+                point.responses_sent > 0 ? point.clicks / point.responses_sent : 0,
               )}
             />
             <DashboardMetricCard
@@ -373,20 +399,32 @@ export function DashboardClient() {
                 />
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
                   <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Utilization</p>
                   <p className="mt-2 font-display text-3xl text-white">
                     {formatPercent(overview.budget_utilization)}
                   </p>
                 </div>
-                <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
-                  <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Projected month-end</p>
-                  <p className="mt-2 font-display text-3xl text-white">
-                    {formatCurrency(overview.projected_monthly_spend)}
-                  </p>
+                  <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Projected month-end</p>
+                    <p className="mt-2 font-display text-3xl text-white">
+                      {formatCurrency(overview.projected_monthly_spend)}
+                    </p>
+                  </div>
+                  <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Confirmed attribution</p>
+                    <p className="mt-2 font-display text-3xl text-white">
+                      {formatNumber(overview.attribution_confidence.confirmed)}
+                    </p>
+                  </div>
+                  <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Estimated attribution</p>
+                    <p className="mt-2 font-display text-3xl text-white">
+                      {formatNumber(overview.attribution_confidence.estimated)}
+                    </p>
+                  </div>
                 </div>
-              </div>
 
               {overview.alerts.length ? (
                 <div className="mt-5 space-y-3">
@@ -401,8 +439,8 @@ export function DashboardClient() {
                 </div>
               ) : (
                 <p className="mt-5 text-sm leading-7 text-slate-400">
-                  The agent still has healthy compute runway. Right now it is operating across{" "}
-                  {formatNumber(listenerStatus.active_surface_count)} discovered surfaces.
+                  The agent still has healthy compute runway. Right now it is searching across{" "}
+                  {formatNumber(listenerStatus.active_surface_count)} discovered surfaces and queueing proposals for approval.
                 </p>
               )}
             </section>
@@ -494,7 +532,7 @@ export function DashboardClient() {
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-medium text-white">{channel.surface}</p>
                           <span className="rounded-full border border-white/10 bg-slate-950/60 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-300">
-                            {formatNumber(channel.actions)} actions
+                            {formatNumber(channel.actions)} proposals
                           </span>
                         </div>
                         <p className="mt-2 text-sm text-slate-400">
@@ -513,7 +551,7 @@ export function DashboardClient() {
                 ))
               ) : (
                 <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4 text-sm leading-7 text-slate-400">
-                  No autonomous actions have been reported yet. Launch the agent or switch to simulation to populate this view.
+                  No proposals have been reported yet. Launch the agent or switch to simulation to populate this view.
                 </div>
               )}
             </div>
@@ -522,7 +560,7 @@ export function DashboardClient() {
           <section className="panel p-6">
             <div className="border-b border-white/8 pb-5">
               <p className="eyebrow">Strategy feed</p>
-              <h2 className="font-display text-2xl text-white">How the agent thinks it is winning</h2>
+                <h2 className="font-display text-2xl text-white">How the agent thinks it is winning</h2>
             </div>
             <div className="mt-5 space-y-3">
               {listenerAnalytics.strategy_feed.length ? (
@@ -557,7 +595,7 @@ export function DashboardClient() {
                 ))
               ) : (
                 <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4 text-sm leading-7 text-slate-400">
-                  Strategy updates appear when the autonomous agent reports what it tried, what worked, and where it wants to spend compute next.
+                  Strategy updates appear when the agent reports what it tried, what worked, and where it wants to spend compute next.
                 </div>
               )}
             </div>
@@ -569,10 +607,10 @@ export function DashboardClient() {
             <div className="flex flex-col gap-3 border-b border-white/8 pb-5 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="eyebrow">Activity feed</p>
-                <h2 className="font-display text-2xl text-white">Every action, grouped flexibly</h2>
+                <h2 className="font-display text-2xl text-white">Every proposal, approval, click, and conversion</h2>
               </div>
               <div className="flex flex-wrap gap-2">
-                {(["all", "action", "strategy", "click", "conversion", "match"] as FeedFilter[]).map((value) => (
+                {(["all", "proposal", "action", "strategy", "click", "conversion", "match"] as FeedFilter[]).map((value) => (
                   <button
                     key={value}
                     onClick={() => setFeedFilter(value)}
@@ -615,6 +653,11 @@ export function DashboardClient() {
                       <p className="mt-2 text-sm leading-7 text-slate-400">{entry.detail}</p>
                       {entry.product_name ? (
                         <p className="mt-2 text-sm text-slate-300">Product: {entry.product_name}</p>
+                      ) : null}
+                      {entry.proposal_status ? (
+                        <p className="mt-2 text-sm text-slate-400">
+                          Proposal status: {entry.proposal_status.replace(/_/g, " ")}
+                        </p>
                       ) : null}
                     </div>
                     {entry.compute_cost ? (
