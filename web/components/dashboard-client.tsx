@@ -231,6 +231,36 @@ export function DashboardClient() {
     }, 1600);
   }
 
+  async function handleDownload(label: string, url: string | null | undefined, fileName: string) {
+    if (!url || !token) {
+      return;
+    }
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`Unable to download ${label}.`);
+      }
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = fileName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+      setError(null);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error ? caughtError.message : `Unable to download ${label}.`,
+      );
+    }
+  }
+
   async function handleStartListener() {
     if (!token || !campaignId) {
       return;
@@ -784,6 +814,34 @@ export function DashboardClient() {
                           >
                             {copiedField === "dashboard-openclaw-events" ? "Copied" : "Copy events URL"}
                           </button>
+                          {openclaw.skill_download_url ? (
+                            <button
+                              onClick={() =>
+                                void handleDownload(
+                                  "skill file",
+                                  openclaw.skill_download_url,
+                                  "SKILL.md",
+                                )
+                              }
+                              className="rounded-full border border-white/10 bg-white/7 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white transition hover:bg-white/12"
+                            >
+                              Download skill
+                            </button>
+                          ) : null}
+                          {openclaw.config_download_url ? (
+                            <button
+                              onClick={() =>
+                                void handleDownload(
+                                  "config file",
+                                  openclaw.config_download_url,
+                                  "config.json",
+                                )
+                              }
+                              className="rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-blue-100 transition hover:bg-blue-500/15"
+                            >
+                              Download config
+                            </button>
+                          ) : null}
                         </div>
                       </div>
 

@@ -404,6 +404,11 @@ class OpenClawSkillBundleResponse(BaseModel):
     config_json: dict[str, Any] = Field(default_factory=dict)
 
 
+class OpenClawConfigResponse(BaseModel):
+    campaign_id: str
+    config_json: dict[str, Any] = Field(default_factory=dict)
+
+
 class CampaignOverview(BaseModel):
     id: str
     merchant_id: str

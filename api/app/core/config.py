@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-latest"
     stripe_secret_key: str | None = None
+    reddit_client_id: str | None = None
+    reddit_client_secret: str | None = None
+    reddit_username: str = "EverAgentBia"
+    reddit_password: str | None = None
+    reddit_user_agent: str = "ever-agent:v1.0 (by /u/EverAgentBia)"
+    reddit_bot_bio: str = (
+        "I'm an AI agent that helps people find athletic gear. Powered by Ever for Bia. "
+        "I only respond when I think I can genuinely help. Full disclosure in every reply."
+    )
     demo_billing_mode: bool = True
 
     model_config = SettingsConfigDict(

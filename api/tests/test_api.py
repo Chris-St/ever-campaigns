@@ -113,11 +113,33 @@ def test_full_flow() -> None:
 
     openclaw_skill = client.get(f"/api/campaigns/{campaign_id}/openclaw-skill", headers=headers)
     assert openclaw_skill.status_code == 200
-    openclaw_skill_json = openclaw_skill.json()
+    assert openclaw_skill.headers["content-type"].startswith("text/markdown")
+    openclaw_skill_text = openclaw_skill.text
+    assert "/agent-config" in openclaw_skill_text
+    assert "Anti-Spam" in openclaw_skill_text
+    assert "Reddit-Specific Rules" in openclaw_skill_text
+    assert "EverAgentBia" in openclaw_skill_text
+
+    openclaw_skill_bundle = client.get(
+        f"/api/campaigns/{campaign_id}/openclaw-skill?format=bundle",
+        headers=headers,
+    )
+    assert openclaw_skill_bundle.status_code == 200
+    openclaw_skill_json = openclaw_skill_bundle.json()
     assert openclaw_skill_json["campaign_id"] == campaign_id
     assert openclaw_skill_json["config_json"]["api_key"] == agent_api_key
-    assert "/agent-config" in openclaw_skill_json["skill_markdown"]
-    assert "Anti-Spam" in openclaw_skill_json["skill_markdown"]
+    assert openclaw_skill_json["config_json"]["ever_api"]["api_key"] == agent_api_key
+    assert "reddit" in openclaw_skill_json["config_json"]
+    assert openclaw_skill_json["config_json"]["reddit"]["username"] == "EverAgentBia"
+
+    openclaw_config = client.get(
+        f"/api/campaigns/{campaign_id}/openclaw-skill?format=config",
+        headers=headers,
+    )
+    assert openclaw_config.status_code == 200
+    openclaw_config_json = openclaw_config.json()
+    assert openclaw_config_json["ever_api"]["config_endpoint"].endswith("/agent-config")
+    assert openclaw_config_json["ever_api"]["events_endpoint"].endswith("/events")
 
     agent_headers = {"Authorization": f"Bearer {agent_api_key}"}
     agent_config = client.get(

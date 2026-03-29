@@ -88,6 +88,9 @@ export interface OpenClawEndpoint {
   description: string;
   config_url: string;
   events_url: string;
+  skill_download_url?: string | null;
+  config_download_url?: string | null;
+  bundle_download_url?: string | null;
   api_key?: string | null;
   api_key_preview?: string | null;
   skill_path?: string | null;

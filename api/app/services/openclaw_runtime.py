@@ -77,11 +77,35 @@ def format_guideline_block(items: list[str], prefix: str) -> str:
     return "\n".join(f"- {prefix}{item}" for item in items)
 
 
+def build_reddit_footer(brand_name: str) -> str:
+    return (
+        "---\n"
+        f"*I'm an AI agent for {brand_name}, built by Ever. I only respond when I think I can help. "
+        "Not affiliated with this subreddit.*"
+    )
+
+
 def build_openclaw_config_payload(campaign, api_key: str) -> dict[str, Any]:
+    config_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config"
+    events_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/events"
     return {
         "campaign_id": campaign.id,
-        "config_endpoint": f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config",
+        "config_endpoint": config_endpoint,
+        "events_endpoint": events_endpoint,
         "api_key": api_key,
+        "reddit": {
+            "client_id": settings.reddit_client_id or "",
+            "client_secret": settings.reddit_client_secret or "",
+            "username": settings.reddit_username,
+            "password": settings.reddit_password or "",
+            "user_agent": settings.reddit_user_agent,
+            "bio": settings.reddit_bot_bio,
+        },
+        "ever_api": {
+            "config_endpoint": config_endpoint,
+            "events_endpoint": events_endpoint,
+            "api_key": api_key,
+        },
     }
 
 
@@ -111,6 +135,7 @@ def build_runtime_skill(campaign, api_key: str) -> str:
     dos = campaign.brand_voice_profile.get("dos", [])
     donts = campaign.brand_voice_profile.get("donts", [])
     events_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/events"
+    reddit_footer = build_reddit_footer(brand_name)
     subreddit_list = ", ".join(reddit_surface.get("subreddits", [])) or "none configured"
     search_queries = ", ".join(twitter_surface.get("search_queries", [])) or "none configured"
     category_list = ", ".join(product_categories) or "your configured product categories"
@@ -131,6 +156,8 @@ def build_runtime_skill(campaign, api_key: str) -> str:
         "## On Startup",
         f"Fetch your config: GET {settings.public_api_url}/api/campaigns/{campaign.id}/agent-config",
         f"Authorization: Bearer {api_key}",
+        f"Use Reddit account: {settings.reddit_username}",
+        f'Reddit profile bio should read: "{settings.reddit_bot_bio}"',
         "",
         "## Core Loop",
         "",
@@ -156,6 +183,7 @@ def build_runtime_skill(campaign, api_key: str) -> str:
             "- Matches platform culture",
             "- Naturally mentions the product only if it fits",
             f'- Ends with: "{disclosure}"',
+            f'- For Reddit replies, append exactly:\n{reddit_footer}',
             f"- Includes referral link: {referral_base}?src={{surface}}&cid={campaign.id}&iid={{uuid}}",
             "",
         ]
@@ -185,6 +213,16 @@ def build_runtime_skill(campaign, api_key: str) -> str:
             "- Always include disclosure",
             "- Never trash competitors",
             "- If >20% negative engagement today, pause 6 hours",
+            "",
+            "### Reddit-Specific Rules",
+            "- Account must have bot flair or clearly indicate bot status in profile",
+            f"- Every response MUST end with:\n{reddit_footer}",
+            "- Never post in subreddits that explicitly ban bots (check sidebar rules before first post)",
+            "- Never vote on any content",
+            "- Never post top-level submissions, only reply to existing posts/comments",
+            "- If a moderator asks you to stop, immediately add that subreddit to a blocklist",
+            "- Comply with Reddit API rate limits: max 60 requests per minute",
+            f'- User-Agent header must identify the bot: "{settings.reddit_user_agent}"',
             "",
             "### Config Refresh",
             "Re-fetch /agent-config every 30 minutes. If status is \"paused\" or \"stopped\", halt.",

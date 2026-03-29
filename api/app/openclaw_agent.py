@@ -197,6 +197,8 @@ def fetch_config(client: httpx.Client, config_endpoint: str, api_key: str) -> di
 def load_runtime_credentials(args: argparse.Namespace) -> tuple[str, str]:
     if args.config_path:
         payload = json.loads(Path(args.config_path).read_text(encoding="utf-8"))
+        if "ever_api" in payload:
+            return payload["ever_api"]["config_endpoint"], payload["ever_api"]["api_key"]
         return payload["config_endpoint"], payload["api_key"]
     if args.campaign_id and args.api_base and args.api_key:
         return f"{args.api_base}/api/campaigns/{args.campaign_id}/agent-config", args.api_key
