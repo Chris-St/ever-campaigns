@@ -14,12 +14,15 @@ import type { ListenerStatus, ReviewQueueItem } from "@/lib/types";
 export function ReviewQueueClient() {
   const router = useRouter();
   const { token, user, loading } = useAuth();
-  const [campaignId, setCampaignIdState] = useState<string | null>(null);
   const [listenerStatus, setListenerStatus] = useState<ListenerStatus | null>(null);
   const [items, setItems] = useState<ReviewQueueItem[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const storedCampaignId = user ? getActiveCampaignId() : null;
+  const campaignId = user
+    ? user.campaigns.find((campaign) => campaign.id === storedCampaignId)?.id ?? user.campaigns[0]?.id ?? null
+    : null;
 
   useEffect(() => {
     if (!loading && !token) {
@@ -27,20 +30,13 @@ export function ReviewQueueClient() {
       return;
     }
     if (!loading && token && user) {
-      const storedCampaignId = getActiveCampaignId();
-      const activeCampaignId =
-        user.campaigns.find((campaign) => campaign.id === storedCampaignId)?.id ??
-        user.campaigns[0]?.id;
-
-      if (!activeCampaignId) {
+      if (!campaignId) {
         router.replace("/onboarding");
         return;
       }
-
-      setActiveCampaignId(activeCampaignId);
-      setCampaignIdState(activeCampaignId);
+      setActiveCampaignId(campaignId);
     }
-  }, [loading, router, token, user]);
+  }, [campaignId, loading, router, token, user]);
 
   useEffect(() => {
     if (!token || !campaignId) {
@@ -205,8 +201,8 @@ export function ReviewQueueClient() {
   return (
     <div className="min-h-screen">
       <AppHeader
-        title="Review Queue"
-        subtitle="Approve the first wave of intent-listener replies, tighten the copy, and teach Ever what high-quality outreach looks like."
+        title="Human Review"
+        subtitle="Optional approval queue for responses that need a second look before the autonomous agent publishes them."
       />
 
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-5 py-6 sm:px-8 lg:px-10">
@@ -243,18 +239,18 @@ export function ReviewQueueClient() {
 
         {listenerStatus.status === "stopped" ? (
           <section className="panel p-6">
-            <p className="eyebrow">Listener offline</p>
-            <h2 className="font-display text-2xl text-white">Start monitoring surfaces</h2>
+            <p className="eyebrow">Agent offline</p>
+            <h2 className="font-display text-2xl text-white">Launch the autonomous agent</h2>
             <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-400">
-              The review queue wakes up as soon as the listener starts scanning Reddit and X for
-              high-intent conversations.
+              This queue only fills when the agent surfaces responses that still need human approval.
+              Launch it first, then come back here if you want to edit or approve anything sensitive.
             </p>
             <button
               onClick={handleStartListener}
               disabled={busyId === "start"}
               className="mt-6 rounded-full bg-emerald-400 px-6 py-4 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {busyId === "start" ? "Starting..." : "Start listener"}
+              {busyId === "start" ? "Launching..." : "Launch agent"}
             </button>
           </section>
         ) : null}
@@ -264,14 +260,14 @@ export function ReviewQueueClient() {
             <div>
               <p className="eyebrow">Responses awaiting approval</p>
               <h2 className="font-display text-2xl text-white">
-                Human review before the first wave goes live
+                Manual review for edge-case responses
               </h2>
             </div>
             <Link
               href="/settings"
               className="rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10"
             >
-              Adjust listener settings
+              Adjust agent settings
             </Link>
           </div>
 
@@ -395,8 +391,8 @@ export function ReviewQueueClient() {
               ))
             ) : (
               <div className="rounded-[1.7rem] border border-white/8 bg-white/4 p-6 text-sm leading-7 text-slate-400">
-                No responses are waiting for approval right now. The queue will refill as new
-                high-intent conversations are detected.
+                No responses are waiting for approval right now. Most autonomous activity can flow
+                without manual intervention, and anything that does need a second look will appear here.
               </div>
             )}
           </div>

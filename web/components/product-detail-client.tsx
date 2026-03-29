@@ -84,7 +84,7 @@ export function ProductDetailClient({ productId }: { productId: string }) {
         <div className="grid gap-6 xl:grid-cols-[0.78fr_1.22fr]">
           <section className="panel p-6">
             <Image
-              src={product.images[0] ?? fallbackImageSrc}
+              src={fallbackImageSrc(product.images[0])}
               alt={product.name}
               width={960}
               height={1100}

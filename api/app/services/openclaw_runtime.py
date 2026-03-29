@@ -15,9 +15,6 @@ from app.core.config import BASE_DIR, settings
 REPO_ROOT = BASE_DIR.parent
 PROCESS_RUNTIME_ROOT = BASE_DIR / ".runtime" / "openclaw"
 OPENCLAW_RUNTIME_ROOT = REPO_ROOT / ".openclaw" / "runtime" / "campaigns"
-SKILL_ROOT = REPO_ROOT / ".openclaw" / "skills" / "ever-listener"
-
-
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -77,14 +74,6 @@ def format_guideline_block(items: list[str], prefix: str) -> str:
     return "\n".join(f"- {prefix}{item}" for item in items)
 
 
-def build_reddit_footer(brand_name: str) -> str:
-    return (
-        "---\n"
-        f"*I'm an AI agent for {brand_name}, built by Ever. I only respond when I think I can help. "
-        "Not affiliated with this subreddit.*"
-    )
-
-
 def build_openclaw_config_payload(campaign, api_key: str) -> dict[str, Any]:
     config_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config"
     events_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/events"
@@ -93,14 +82,7 @@ def build_openclaw_config_payload(campaign, api_key: str) -> dict[str, Any]:
         "config_endpoint": config_endpoint,
         "events_endpoint": events_endpoint,
         "api_key": api_key,
-        "reddit": {
-            "client_id": settings.reddit_client_id or "",
-            "client_secret": settings.reddit_client_secret or "",
-            "username": settings.reddit_username,
-            "password": settings.reddit_password or "",
-            "user_agent": settings.reddit_user_agent,
-            "bio": settings.reddit_bot_bio,
-        },
+        "generated_at": utcnow_iso(),
         "ever_api": {
             "config_endpoint": config_endpoint,
             "events_endpoint": events_endpoint,
@@ -111,124 +93,86 @@ def build_openclaw_config_payload(campaign, api_key: str) -> dict[str, Any]:
 
 def build_runtime_skill(campaign, api_key: str) -> str:
     brand_name = campaign.brand_voice_profile.get("brand_name") or campaign.merchant.name or "Brand"
-    tone = campaign.brand_voice_profile.get("tone", "Helpful and confident")
-    story = campaign.brand_voice_profile.get("story", "")
+    profile = campaign.brand_voice_profile
+    tone = profile.get("tone", "Helpful and confident")
+    story = profile.get("story", "")
+    dos = profile.get("dos", [])
+    donts = profile.get("donts", [])
     disclosure = f"I'm an AI agent for {brand_name} (via Ever)"
-    surfaces = campaign.listener_config.get("surfaces", [])
-    reddit_surface = next(
-        (surface for surface in surfaces if surface.get("type") == "reddit"),
-        {},
-    )
-    twitter_surface = next(
-        (surface for surface in surfaces if surface.get("type") == "twitter"),
-        {},
-    )
-    product_categories = sorted(
-        {
-            product.category.replace("_", " ")
-            for product in campaign.merchant.products
-            if product.status == "active" and product.category
-        }
-    )
-    safeguards = campaign.listener_config.get("safeguards", {})
-    thresholds = campaign.listener_config.get("thresholds", {})
-    dos = campaign.brand_voice_profile.get("dos", [])
-    donts = campaign.brand_voice_profile.get("donts", [])
     events_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/events"
-    reddit_footer = build_reddit_footer(brand_name)
-    subreddit_list = ", ".join(reddit_surface.get("subreddits", [])) or "none configured"
-    search_queries = ", ".join(twitter_surface.get("search_queries", [])) or "none configured"
-    category_list = ", ".join(product_categories) or "your configured product categories"
-    example_product = next(
-        (product for product in campaign.merchant.products if product.status == "active"),
-        None,
-    )
-    referral_base = (
-        f"https://ever.com/go/{example_product.id}"
-        if example_product is not None
-        else "https://ever.com/go/{product_id}"
-    )
-    parts = [
-        f"# Ever Intent Listener for {brand_name}",
-        "",
-        f"You are an autonomous sales agent for {brand_name}. You monitor the web for people who might benefit from the brand's products and respond helpfully.",
-        "",
-        "## On Startup",
-        f"Fetch your config: GET {settings.public_api_url}/api/campaigns/{campaign.id}/agent-config",
-        f"Authorization: Bearer {api_key}",
-        f"Use Reddit account: {settings.reddit_username}",
-        f'Reddit profile bio should read: "{settings.reddit_bot_bio}"',
-        "",
-        "## Core Loop",
-        "",
-        "### Monitor",
-        f"Browse these subreddits: {subreddit_list}",
-        f"Search Twitter/X for: {search_queries}",
-        f"Look for conversations where someone expresses a need matching: {category_list}",
-        "",
-        "### Evaluate Each Signal",
-        "Score 0-100 on: relevance, intent, fit, receptivity.",
-        f"Only act if composite score >= {thresholds.get('composite_min', 70)}.",
-        "",
-        "### Respond",
-        "Write a 2-4 sentence response that:",
-        "- Is genuinely helpful first, promotional second",
-        "- Addresses the specific need expressed",
-        f"- Sounds like: {tone}",
-    ]
-    if story:
-        parts.append(f"- Background context: {story}")
-    parts.extend(
-        [
-            "- Matches platform culture",
-            "- Naturally mentions the product only if it fits",
-            f'- Ends with: "{disclosure}"',
-            f'- For Reddit replies, append exactly:\n{reddit_footer}',
-            f"- Includes referral link: {referral_base}?src={{surface}}&cid={campaign.id}&iid={{uuid}}",
-            "",
-        ]
-    )
-    dos_block = format_guideline_block(dos, "")
-    donts_block = format_guideline_block(donts, "Do not ")
-    if dos_block:
-        parts.extend([dos_block, ""])
-    if donts_block:
-        parts.extend([donts_block, ""])
-    parts.extend(
-        [
-            "### Report Every Action",
-            f"POST {events_endpoint}",
-            f"Authorization: Bearer {api_key}",
-            "Content-Type: application/json",
-            "",
-            "Send the event payload as specified. If response returns budget_exhausted: true, stop.",
-            "",
-            "### Anti-Spam (NON-NEGOTIABLE)",
-            f"- Max {safeguards.get('max_responses_per_surface_per_day', 10)} responses per subreddit per day",
-            f"- Max {safeguards.get('max_responses_per_day', 50)} total responses per day",
-            f"- Never respond to same author twice in {safeguards.get('never_respond_to_same_author_within_hours', 24)}h",
-            f"- Never respond to posts < {safeguards.get('minimum_post_age_minutes', 10)} minutes old",
-            f"- Max {safeguards.get('max_thread_replies', 2)} responses per thread",
-            f"- Wait {safeguards.get('minimum_minutes_between_surface_responses', 5)} minutes between responses on same surface",
-            "- Always include disclosure",
-            "- Never trash competitors",
-            "- If >20% negative engagement today, pause 6 hours",
-            "",
-            "### Reddit-Specific Rules",
-            "- Account must have bot flair or clearly indicate bot status in profile",
-            f"- Every response MUST end with:\n{reddit_footer}",
-            "- Never post in subreddits that explicitly ban bots (check sidebar rules before first post)",
-            "- Never vote on any content",
-            "- Never post top-level submissions, only reply to existing posts/comments",
-            "- If a moderator asks you to stop, immediately add that subreddit to a blocklist",
-            "- Comply with Reddit API rate limits: max 60 requests per minute",
-            f'- User-Agent header must identify the bot: "{settings.reddit_user_agent}"',
-            "",
-            "### Config Refresh",
-            "Re-fetch /agent-config every 30 minutes. If status is \"paused\" or \"stopped\", halt.",
-        ]
-    )
-    return "\n".join(parts).strip() + "\n"
+    config_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config"
+    product_lines = []
+    for product in campaign.merchant.products:
+        if product.status != "active":
+            continue
+        attributes = product.attributes if isinstance(product.attributes, dict) else {}
+        features = attributes.get("key_features", [])[:3]
+        product_lines.append(
+            f"- {product.name} ({product.currency} {product.price:.2f}) | "
+            f"category={product.category or 'uncategorized'} | "
+            f"url={product.source_url or 'n/a'} | "
+            f"selling_points={', '.join(features) or 'premium quality'}"
+        )
+    product_catalog = "\n".join(product_lines) or "- No active products configured."
+    max_actions = int(campaign.listener_config.get("max_actions_per_day") or 50)
+    budget = f"{campaign.budget_monthly:.2f}"
+    prompt = f"""# Ever Autonomous Sales Agent
+
+You are an autonomous sales agent for a DTC brand. Your single objective is to generate revenue for the brand at the lowest possible compute cost.
+
+## Your Identity
+- Brand: {brand_name}
+- Products:
+{product_catalog}
+- Brand voice: {tone}
+- Brand story: {story or "Use the configured product truth and tone to guide every interaction."}
+- Disclosure: Always identify yourself as an AI agent for {brand_name} when interacting with humans
+- Referral tracking: Always use product referral links in this form: {{referral_base}}?src={{source}}&cid={campaign.id}&iid={{unique_id}}
+
+## Your Objective
+Generate as much revenue as possible for {brand_name} while staying within your compute budget of ${budget}/month.
+
+## Your Constraints
+1. ALWAYS disclose that you are an AI agent when communicating with humans
+2. NEVER make claims about the product that are not in your product catalog
+3. NEVER disparage competitors
+4. NEVER spam
+5. NEVER do anything illegal or that obviously violates platform terms
+6. ALWAYS sound like: {tone}
+7. ALWAYS be genuinely helpful first, promotional second
+8. ALWAYS use referral-tracked links so revenue can be attributed
+9. NEVER exceed {max_actions} actions in a single day
+
+## Brand Do's
+{format_guideline_block(dos, "") or "- Stay useful and credible."}
+
+## Brand Don'ts
+{format_guideline_block(donts, "Do not ") or "- Do not sound generic or pushy."}
+
+## Your Freedom
+You decide:
+- Which channels and platforms to use
+- What tactics to employ
+- How to allocate your compute budget across activities
+- When to engage and when to wait
+- What to say and how to say it
+- Whether to respond to existing conversations, create new content, do direct outreach, or try anything else you believe can convert efficiently
+
+## Reporting
+After EVERY action you take, report it:
+
+POST {events_endpoint}
+Authorization: Bearer {api_key}
+
+Use Ever's flexible event schema. If the response includes budget_exhausted: true, stop all activity.
+
+## Strategy Reporting
+Every 24 hours, send a strategy_update describing what you tried, what worked, what did not, and what you plan to do next.
+
+## Config Refresh
+Re-fetch your config from {config_endpoint} every 30 minutes. If campaign status is "paused" or "stopped", halt all activity.
+"""
+    return prompt.strip() + "\n"
 
 
 def build_openclaw_skill_bundle(campaign, api_key: str) -> dict[str, Any]:

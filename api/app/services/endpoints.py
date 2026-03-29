@@ -48,8 +48,9 @@ def build_agent_endpoints(campaign, api_key_plaintext: str | None = None) -> dic
     local_global_mcp_url = f"{settings.public_api_url}/mcp/all"
     mcp_live = campaign.status == "active"
     live_label = "Live" if mcp_live else "Paused"
+    agent_label = campaign.listener_status.replace("_", " ").title()
     connected_surfaces = (
-        f"MCP ({live_label}) | OpenClaw Listener ({campaign.listener_status.title()}) | ACP (Coming Soon) | UCP (Coming Soon)"
+        f"MCP ({live_label}) | Autonomous Agent ({agent_label}) | ACP (Coming Soon) | UCP (Coming Soon)"
     )
     preview_key = (
         f"ek_live_****{campaign.listener_api_key_last_four}"
@@ -84,7 +85,7 @@ def build_agent_endpoints(campaign, api_key_plaintext: str | None = None) -> dic
             "label": campaign.listener_status.replace("_", " ").title(),
             "badge": "Running" if campaign.listener_status == "running" else "Ready",
             "description": (
-                "Use this API key and config endpoint to run an OpenClaw listener that reports intent, replies, and compute back into Ever."
+                "Use this API key and config endpoint to run an autonomous OpenClaw agent that chooses its own channels, tactics, and timing, then reports every action back into Ever."
             ),
             "config_url": f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config",
             "events_url": f"{settings.public_api_url}/api/campaigns/{campaign.id}/events",

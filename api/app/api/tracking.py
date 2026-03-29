@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db
-from app.models.entities import AgentResponse, Click, Conversion, Match, Product
+from app.models.entities import AgentEvent, AgentResponse, Click, Conversion, Match, Product
 from app.schemas.contracts import ShopifyOrderWebhook
 
 
@@ -42,6 +42,20 @@ def redirect_to_product(
             )
             db.add(click)
             db.commit()
+        else:
+            agent_event = db.scalar(select(AgentEvent).where(AgentEvent.id == iid))
+            if agent_event is not None:
+                click = Click(
+                    match_id=None,
+                    product_id=product_id,
+                    campaign_id=agent_event.campaign_id,
+                    channel="autonomous_agent",
+                    source="autonomous_agent",
+                    surface=src or agent_event.surface,
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(click)
+                db.commit()
     elif q:
         match = db.scalar(
             select(Match)
@@ -91,7 +105,7 @@ def shopify_order_webhook(
             click = max(
                 candidate_clicks,
                 key=lambda candidate: (
-                    candidate.source == "intent_listener",
+                    candidate.source in {"intent_listener", "autonomous_agent"},
                     candidate.created_at,
                 ),
             )

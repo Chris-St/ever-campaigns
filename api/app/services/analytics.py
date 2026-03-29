@@ -7,7 +7,16 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.models.entities import AgentResponse, Campaign, Click, Conversion, IntentSignal, Match, Product
+from app.models.entities import (
+    AgentEvent,
+    AgentResponse,
+    Campaign,
+    Click,
+    Conversion,
+    IntentSignal,
+    Match,
+    Product,
+)
 from app.services.endpoints import build_agent_endpoints
 
 
@@ -42,6 +51,9 @@ def compute_campaign_overview(
     listener_responses = db.scalars(
         select(AgentResponse).where(AgentResponse.campaign_id == campaign.id)
     ).all()
+    agent_events = db.scalars(
+        select(AgentEvent).where(AgentEvent.campaign_id == campaign.id)
+    ).all()
     conversions = db.scalars(
         select(Conversion)
         .where(Conversion.campaign_id == campaign.id)
@@ -51,7 +63,8 @@ def compute_campaign_overview(
     compute_spent = round(
         sum(match.compute_cost for match in matches)
         + sum(signal.scoring_cost for signal in listener_signals)
-        + sum(response.generation_cost for response in listener_responses),
+        + sum(response.generation_cost for response in listener_responses)
+        + sum(event.compute_cost_usd for event in agent_events),
         2,
     )
     revenue = round(sum(conversion.order_value for conversion in conversions), 2)
@@ -63,6 +76,7 @@ def compute_campaign_overview(
     cost_events = [(match.created_at, match.compute_cost) for match in matches]
     cost_events.extend((signal.created_at, signal.scoring_cost) for signal in listener_signals)
     cost_events.extend((response.created_at, response.generation_cost) for response in listener_responses)
+    cost_events.extend((event.created_at, event.compute_cost_usd) for event in agent_events)
     projected_monthly_spend = round(project_monthly_spend(cost_events), 2)
     alerts = []
     if budget_utilization >= 1:
@@ -76,6 +90,7 @@ def compute_campaign_overview(
         matches,
         listener_signals,
         listener_responses,
+        agent_events,
         conversions,
     )
 
@@ -130,6 +145,7 @@ def sparkline_series(
     matches: list[Match],
     listener_signals: list[IntentSignal],
     listener_responses: list[AgentResponse],
+    agent_events: list[AgentEvent],
     conversions: list[Conversion],
 ) -> tuple[list[float], list[float]]:
     now = datetime.now(timezone.utc).date()
@@ -141,6 +157,8 @@ def sparkline_series(
         compute_map[ensure_utc(signal.created_at).date()] += signal.scoring_cost
     for response in listener_responses:
         compute_map[ensure_utc(response.created_at).date()] += response.generation_cost
+    for event in agent_events:
+        compute_map[ensure_utc(event.created_at).date()] += event.compute_cost_usd
     for conversion in conversions:
         revenue_map[ensure_utc(conversion.created_at).date()] += conversion.order_value
 
@@ -166,6 +184,7 @@ def build_metric_series(db: Session, campaign_id: str, period: str) -> list[dict
     matches = db.scalars(select(Match).where(Match.campaign_id == campaign_id)).all()
     listener_signals = db.scalars(select(IntentSignal).where(IntentSignal.campaign_id == campaign_id)).all()
     listener_responses = db.scalars(select(AgentResponse).where(AgentResponse.campaign_id == campaign_id)).all()
+    agent_events = db.scalars(select(AgentEvent).where(AgentEvent.campaign_id == campaign_id)).all()
     conversions = db.scalars(select(Conversion).where(Conversion.campaign_id == campaign_id)).all()
     compute_map = defaultdict(float)
     revenue_map = defaultdict(float)
@@ -176,6 +195,8 @@ def build_metric_series(db: Session, campaign_id: str, period: str) -> list[dict
         compute_map[ensure_utc(signal.created_at).date()] += signal.scoring_cost
     for response in listener_responses:
         compute_map[ensure_utc(response.created_at).date()] += response.generation_cost
+    for event in agent_events:
+        compute_map[ensure_utc(event.created_at).date()] += event.compute_cost_usd
     for conversion in conversions:
         conversion_date = ensure_utc(conversion.created_at).date()
         revenue_map[conversion_date] += conversion.order_value
@@ -203,6 +224,9 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
     listener_responses = db.scalars(
         select(AgentResponse).where(AgentResponse.campaign_id == campaign.id)
     ).all()
+    agent_events = db.scalars(
+        select(AgentEvent).where(AgentEvent.campaign_id == campaign.id)
+    ).all()
     products = db.scalars(
         select(Product)
         .where(Product.merchant_id == campaign.merchant_id)
@@ -217,12 +241,14 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
         matches = [match for match in product.matches if match.campaign_id == campaign.id]
         product_signals = [signal for signal in listener_signals if signal.product_id == product.id]
         product_responses = [response for response in listener_responses if response.product_id == product.id]
+        product_events = [event for event in agent_events if event.product_id == product.id]
         clicks = [click for click in product.clicks if click.campaign_id == campaign.id]
         conversions = [conversion for conversion in product.conversions if conversion.campaign_id == campaign.id]
         compute_spent = (
             sum(match.compute_cost for match in matches)
             + sum(signal.scoring_cost for signal in product_signals)
             + sum(response.generation_cost for response in product_responses)
+            + sum(event.compute_cost_usd for event in product_events)
         )
         revenue = sum(conversion.order_value for conversion in conversions)
         roc = round(revenue / compute_spent, 2) if compute_spent else 0.0
@@ -238,7 +264,7 @@ def build_product_rows(db: Session, campaign: Campaign) -> list[dict]:
                 "price": product.price,
                 "currency": product.currency,
                 "image": product.images[0] if product.images else None,
-                "matches": len(matches) + len(product_signals),
+                "matches": len(matches) + len(product_signals) + len(product_events),
                 "clicks": len(clicks),
                 "conversions": len(conversions),
                 "revenue": round(revenue, 2),
@@ -261,15 +287,10 @@ def build_activity_feed(
         .where(Match.campaign_id == campaign_id)
         .options(joinedload(Match.product), joinedload(Match.query))
     ).all()
-    signals = db.scalars(
-        select(IntentSignal)
-        .where(IntentSignal.campaign_id == campaign_id)
-        .options(joinedload(IntentSignal.product))
-    ).all()
-    responses = db.scalars(
-        select(AgentResponse)
-        .where(AgentResponse.campaign_id == campaign_id)
-        .options(joinedload(AgentResponse.product), joinedload(AgentResponse.signal))
+    agent_events = db.scalars(
+        select(AgentEvent)
+        .where(AgentEvent.campaign_id == campaign_id)
+        .options(joinedload(AgentEvent.product))
     ).all()
     clicks = db.scalars(
         select(Click)
@@ -287,7 +308,8 @@ def build_activity_feed(
     ).all()
 
     events = []
-    if event_type in ("all", "match"):
+    normalized_filter = event_type.lower()
+    if normalized_filter in ("all", "match"):
         for match in matches:
             query_text = match.query.query_text if match.query else "agent query"
             events.append(
@@ -300,55 +322,47 @@ def build_activity_feed(
                     "timestamp": match.created_at.isoformat(),
                     "relative_time": relative_time(match.created_at),
                     "product_id": match.product_id,
+                    "product_name": match.product.name,
+                    "surface": match.channel,
+                    "category": "match",
+                    "compute_cost": match.compute_cost,
                 }
             )
-        for signal in signals:
-            channel_label = signal.subreddit_or_channel or signal.surface
-            detail_context = signal.context_text or signal.content_text
+    if normalized_filter in ("all", "action", "strategy", "response"):
+        for agent_event in agent_events:
+            event_bucket = "strategy" if agent_event.event_type == "strategy_update" else "action"
+            if normalized_filter not in ("all", "response") and normalized_filter != event_bucket:
+                continue
+            if normalized_filter == "response" and agent_event.event_type != "action":
+                continue
+            title = (
+                "Strategy update"
+                if agent_event.event_type == "strategy_update"
+                else f"{(agent_event.category or 'action').replace('_', ' ').title()} on {agent_event.surface or 'other'}"
+            )
             events.append(
                 {
-                    "id": signal.id,
-                    "event_type": "match",
-                    "channel": "intent_listener",
-                    "title": f"Intent detected on {signal.surface}",
-                    "detail": f"{channel_label}: {detail_context}",
-                    "timestamp": signal.created_at.isoformat(),
-                    "relative_time": relative_time(signal.created_at),
-                    "product_id": signal.product_id,
+                    "id": agent_event.id,
+                    "event_type": agent_event.event_type,
+                    "channel": "autonomous_agent",
+                    "category": agent_event.category,
+                    "surface": agent_event.surface,
+                    "title": title,
+                    "detail": agent_event.description,
+                    "timestamp": agent_event.created_at.isoformat(),
+                    "relative_time": relative_time(agent_event.created_at),
+                    "product_id": agent_event.product_id,
+                    "product_name": agent_event.product.name if agent_event.product else None,
+                    "compute_cost": agent_event.compute_cost_usd,
+                    "expected_impact": agent_event.expected_impact,
+                    "source_url": agent_event.source_url,
                 }
             )
 
-    if event_type in ("all", "response"):
-        for response in responses:
-            action_label = (
-                "Reply posted"
-                if response.posted
-                else "Response queued"
-                if response.review_status == "pending"
-                else "Response skipped"
-                if response.review_status == "rejected"
-                else "Response created"
-            )
-            channel_label = response.signal.subreddit_or_channel if response.signal else response.surface
-            events.append(
-                {
-                    "id": response.id,
-                    "event_type": "response",
-                    "channel": "intent_listener",
-                    "title": f"{action_label} on {response.surface}",
-                    "detail": (
-                        f"{channel_label}: {response.response_text or 'No response text recorded.'}"
-                    ),
-                    "timestamp": response.created_at.isoformat(),
-                    "relative_time": relative_time(response.created_at),
-                    "product_id": response.product_id,
-                }
-            )
-
-    if event_type in ("all", "click"):
+    if normalized_filter in ("all", "click"):
         for click in clicks:
-            if click.source == "intent_listener" and click.response:
-                detail = f"Viewed via {click.surface or 'social'} reply from Ever's intent listener"
+            if click.source in {"intent_listener", "autonomous_agent"}:
+                detail = f"Viewed via {click.surface or 'social'} autonomous agent activity"
             else:
                 agent_name = click.match.query.agent_source if click.match and click.match.query else "an agent"
                 detail = f"Surfaced via {agent_name} on {click.channel.upper()}"
@@ -357,20 +371,23 @@ def build_activity_feed(
                     "id": click.id,
                     "event_type": "click",
                     "channel": click.channel,
+                    "category": "click",
+                    "surface": click.surface,
                     "title": f"Click: consumer viewed {click.product.name}",
                     "detail": detail,
                     "timestamp": click.created_at.isoformat(),
                     "relative_time": relative_time(click.created_at),
                     "product_id": click.product_id,
+                    "product_name": click.product.name,
                 }
             )
 
-    if event_type in ("all", "conversion"):
+    if normalized_filter in ("all", "conversion"):
         for conversion in conversions:
-            if conversion.click and conversion.click.source == "intent_listener":
+            if conversion.click and conversion.click.source in {"intent_listener", "autonomous_agent"}:
                 detail = (
                     f"${conversion.order_value:,.2f} attributed revenue from "
-                    f"{(conversion.click.surface or 'social').title()} outreach"
+                    f"{(conversion.click.surface or 'agent').title()} activity"
                 )
             else:
                 detail = f"${conversion.order_value:,.2f} attributed revenue on {conversion.channel.upper()}"
@@ -379,11 +396,14 @@ def build_activity_feed(
                     "id": conversion.id,
                     "event_type": "conversion",
                     "channel": conversion.channel,
+                    "category": "conversion",
+                    "surface": conversion.click.surface if conversion.click else None,
                     "title": f"Conversion: {conversion.product.name} purchased",
                     "detail": detail,
                     "timestamp": conversion.created_at.isoformat(),
                     "relative_time": relative_time(conversion.created_at),
                     "product_id": conversion.product_id,
+                    "product_name": conversion.product.name,
                 }
             )
 

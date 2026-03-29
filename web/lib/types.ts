@@ -115,6 +115,7 @@ export interface ListenerThresholds {
 }
 
 export interface ListenerSafeguards {
+  max_actions_per_day: number;
   max_responses_per_surface_per_day: number;
   max_responses_per_day: number;
   max_thread_replies: number;
@@ -141,6 +142,8 @@ export interface ListenerConfig {
   aggressiveness: "conservative" | "balanced" | "aggressive";
   review_mode: "manual" | "auto";
   auto_post_after_approvals: number;
+  max_actions_per_day: number;
+  quality_threshold: number;
   thresholds: ListenerThresholds;
   safeguards: ListenerSafeguards;
   surfaces: ListenerSurfaceConfig[];
@@ -151,6 +154,10 @@ export interface ListenerStatus {
   status: "running" | "stopped" | "paused" | "budget_exhausted";
   last_active?: string | null;
   last_polled_at?: string | null;
+  actions_today: number;
+  strategy_updates_today: number;
+  active_surfaces: string[];
+  active_surface_count: number;
   signals_today: number;
   responses_today: number;
   surfaces_active: string[];
@@ -221,6 +228,8 @@ export interface ListenerCountBreakdown {
 
 export interface ListenerAnalyticsPoint {
   date: string;
+  actions_reported: number;
+  strategy_updates: number;
   signals_detected: number;
   responses_sent: number;
   clicks: number;
@@ -229,8 +238,30 @@ export interface ListenerAnalyticsPoint {
   compute_cost: number;
 }
 
+export interface ListenerChannelBreakdown {
+  surface: string;
+  actions: number;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  compute_cost: number;
+  return_on_compute: number;
+}
+
+export interface ListenerStrategyEntry {
+  id: string;
+  description: string;
+  channels_used: string[];
+  total_actions: number;
+  compute_cost: number;
+  timestamp: string;
+  relative_time: string;
+}
+
 export interface ListenerAnalytics {
   period: string;
+  actions_reported: number;
+  strategy_updates: number;
   signals_detected: number;
   responses_sent: number;
   responses_pending_review: number;
@@ -247,6 +278,8 @@ export interface ListenerAnalytics {
   top_products: ListenerTopProduct[];
   top_subreddits: ListenerCountBreakdown[];
   intent_score_distribution: ListenerCountBreakdown[];
+  channel_breakdown: ListenerChannelBreakdown[];
+  strategy_feed: ListenerStrategyEntry[];
   daily: ListenerAnalyticsPoint[];
   daily_series: ListenerAnalyticsPoint[];
 }
@@ -297,13 +330,19 @@ export interface ProductPerformanceRow {
 
 export interface ActivityEntry {
   id: string;
-  event_type: "match" | "click" | "conversion" | "response";
+  event_type: string;
   channel: string;
+  category?: string | null;
+  surface?: string | null;
   title: string;
   detail: string;
   timestamp: string;
   relative_time: string;
   product_id?: string | null;
+  product_name?: string | null;
+  compute_cost?: number;
+  expected_impact?: string | null;
+  source_url?: string | null;
 }
 
 export interface CampaignAgentKeyResponse {

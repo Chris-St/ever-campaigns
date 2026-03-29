@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.config import settings
 from app.core.security import generate_campaign_api_key, hash_api_key
 from app.models.entities import (
+    AgentEvent,
     AgentResponse,
     Campaign,
     Click,
@@ -50,6 +51,12 @@ AGGRESSIVENESS_THRESHOLDS = {
     "conservative": {"composite_min": 78, "receptivity_min": 68},
     "balanced": {"composite_min": 70, "receptivity_min": 60},
     "aggressive": {"composite_min": 58, "receptivity_min": 48},
+}
+
+AGGRESSIVENESS_PROFILES = {
+    "conservative": {"max_actions_per_day": 25, "quality_threshold": 78},
+    "balanced": {"max_actions_per_day": 50, "quality_threshold": 64},
+    "aggressive": {"max_actions_per_day": 100, "quality_threshold": 52},
 }
 
 
@@ -154,6 +161,63 @@ DEMO_SIGNAL_LIBRARY: list[dict[str, Any]] = [
     },
 ]
 
+DEMO_AUTONOMOUS_LIBRARY: list[dict[str, Any]] = [
+    {
+        "category": "research",
+        "surface": "reddit",
+        "description": "Reviewed a fresh Reddit thread from runners looking for underwear that will not chafe on long efforts.",
+        "source_content": "What underwear doesn't chafe on long runs?",
+        "source_author": "u/runner_jane",
+        "target_audience": "Women training for distance running",
+        "expected_impact": "high",
+    },
+    {
+        "category": "engagement",
+        "surface": "reddit",
+        "description": "Posted a helpful reply in a gear discussion after confirming the fit was strong for Bia's performance line.",
+        "source_content": "Any recommendations for workout underwear that stays put during intervals?",
+        "source_author": "u/tempo_casey",
+        "target_audience": "High-intent runners comparing options",
+        "expected_impact": "high",
+    },
+    {
+        "category": "content_creation",
+        "surface": "blog",
+        "description": "Drafted a short educational post on how to choose underwear for high-movement training and recovery days.",
+        "source_content": None,
+        "source_author": None,
+        "target_audience": "Prospects researching performance basics",
+        "expected_impact": "medium",
+    },
+    {
+        "category": "outreach",
+        "surface": "email",
+        "description": "Sent a personalized email to a fitness creator whose audience overlaps with Bia's highest-converting buyers.",
+        "source_content": None,
+        "source_author": "fitness.creator@example.com",
+        "target_audience": "Fitness creator with engaged female audience",
+        "expected_impact": "medium",
+    },
+    {
+        "category": "engagement",
+        "surface": "forum",
+        "description": "Joined a boutique women's training forum thread and answered a product-fit question with a tracked recommendation.",
+        "source_content": "Looking for premium workout underwear that still feels good all day.",
+        "source_author": "forum:movementclub",
+        "target_audience": "Women looking for premium active basics",
+        "expected_impact": "medium",
+    },
+    {
+        "category": "research",
+        "surface": "twitter",
+        "description": "Monitored a cluster of posts about breathable training underwear to see where conversion intent was strongest.",
+        "source_content": "best athletic thong for hot yoga and walking all day?",
+        "source_author": "@studio_notes",
+        "target_audience": "People comparing workout underwear options",
+        "expected_impact": "low",
+    },
+]
+
 
 def threshold_config(aggressiveness: str) -> dict[str, int]:
     return AGGRESSIVENESS_THRESHOLDS.get(aggressiveness, AGGRESSIVENESS_THRESHOLDS["balanced"]).copy()
@@ -213,13 +277,17 @@ def build_default_brand_voice(campaign: Campaign) -> dict[str, Any]:
 
 def build_default_listener_config(campaign: Campaign) -> dict[str, Any]:
     aggressiveness = "balanced"
+    profile = AGGRESSIVENESS_PROFILES[aggressiveness]
     return {
         "listener_mode": "simulation",
         "aggressiveness": aggressiveness,
         "review_mode": "auto",
         "auto_post_after_approvals": 50,
+        "max_actions_per_day": profile["max_actions_per_day"],
+        "quality_threshold": profile["quality_threshold"],
         "thresholds": threshold_config(aggressiveness),
         "safeguards": {
+            "max_actions_per_day": profile["max_actions_per_day"],
             "max_responses_per_surface_per_day": 10,
             "max_responses_per_day": 50,
             "max_thread_replies": 2,
@@ -231,44 +299,7 @@ def build_default_listener_config(campaign: Campaign) -> dict[str, Any]:
             "pause_if_downvote_rate_exceeds": 0.20,
             "auto_post_confidence_threshold": 70,
         },
-        "surfaces": [
-            {
-                "type": "reddit",
-                "enabled": True,
-                "subreddits": [
-                    "running",
-                    "marathontraining",
-                    "XXrunning",
-                    "cycling",
-                    "crossfit",
-                    "femalefashionadvice",
-                    "ABraThatFits",
-                    "yoga",
-                    "pilates",
-                ],
-                "keywords": ["underwear", "chafing", "thong", "workout underwear"],
-                "search_queries": [],
-                "poll_interval_seconds": 120,
-            },
-            {
-                "type": "twitter",
-                "enabled": True,
-                "subreddits": [],
-                "keywords": [
-                    "workout underwear",
-                    "running underwear chafing",
-                    "athletic thong",
-                    "gym underwear recommendation",
-                ],
-                "search_queries": [
-                    "workout underwear recommendation",
-                    "running underwear chafing",
-                    "best athletic thong",
-                    "organic cotton sleep set",
-                ],
-                "poll_interval_seconds": 180,
-            },
-        ],
+        "surfaces": [],
     }
 
 
@@ -293,7 +324,15 @@ def normalize_listener_config(config: dict[str, Any] | None) -> dict[str, Any]:
     defaults = build_default_listener_config_for_values()
     merged = merge_dicts(defaults, config)
     aggressiveness = merged.get("aggressiveness", "balanced")
+    profile = AGGRESSIVENESS_PROFILES.get(aggressiveness, AGGRESSIVENESS_PROFILES["balanced"])
     merged["thresholds"] = merge_dicts(threshold_config(aggressiveness), merged.get("thresholds", {}))
+    merged["max_actions_per_day"] = int(merged.get("max_actions_per_day") or profile["max_actions_per_day"])
+    merged["quality_threshold"] = int(merged.get("quality_threshold") or profile["quality_threshold"])
+    safeguards = merge_dicts(defaults.get("safeguards", {}), merged.get("safeguards", {}))
+    safeguards["max_actions_per_day"] = int(
+        safeguards.get("max_actions_per_day") or merged["max_actions_per_day"]
+    )
+    merged["safeguards"] = safeguards
     normalized_surfaces = []
     for surface in merged.get("surfaces", []):
         default_surface = {
@@ -310,13 +349,17 @@ def normalize_listener_config(config: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def build_default_listener_config_for_values() -> dict[str, Any]:
+    profile = AGGRESSIVENESS_PROFILES["balanced"]
     return {
         "listener_mode": "simulation",
         "aggressiveness": "balanced",
         "review_mode": "auto",
         "auto_post_after_approvals": 50,
+        "max_actions_per_day": profile["max_actions_per_day"],
+        "quality_threshold": profile["quality_threshold"],
         "thresholds": threshold_config("balanced"),
         "safeguards": {
+            "max_actions_per_day": profile["max_actions_per_day"],
             "max_responses_per_surface_per_day": 10,
             "max_responses_per_day": 50,
             "max_thread_replies": 2,
@@ -391,13 +434,380 @@ def listener_mode(campaign: Campaign) -> str:
     return campaign.listener_config.get("listener_mode", "simulation")
 
 
+def map_aggressiveness_limits(aggressiveness: str) -> dict[str, int]:
+    return AGGRESSIVENESS_PROFILES.get(aggressiveness, AGGRESSIVENESS_PROFILES["balanced"]).copy()
+
+
+def choose_autonomous_product(campaign: Campaign, template: dict[str, Any], seed: str) -> Product | None:
+    products = get_products_for_campaign(campaign)
+    if not products:
+        return None
+    if template.get("source_content"):
+        return choose_product(
+            products,
+            {
+                "content_text": template.get("source_content", ""),
+                "context_text": template.get("description", ""),
+            },
+        )
+    return products[hash_value(seed) % len(products)]
+
+
+def default_event_description(payload: dict[str, Any]) -> str:
+    event_type = payload.get("event_type", "action")
+    surface = payload.get("surface") or "the web"
+    source_content = payload.get("source_content")
+    if event_type == "strategy_update":
+        return payload.get("description") or "Reported a strategy update."
+    if event_type == "conversion_attempt":
+        return payload.get("description") or "Attempted to convert a high-intent prospect."
+    if event_type in {"intent_detected", "skip", "response_skipped"}:
+        if source_content:
+            return f"Researched a potential opportunity on {surface}: {source_content}"
+        return f"Researched a potential opportunity on {surface}."
+    if event_type in {"response_posted", "dm_sent", "email_sent", "response_pending_review"}:
+        if source_content:
+            return f"Took action on {surface} after finding a strong-fit conversation: {source_content}"
+        return f"Took action on {surface} for a qualified prospect."
+    return payload.get("description") or f"Reported an autonomous agent action on {surface}."
+
+
+def default_event_category(payload: dict[str, Any]) -> str:
+    event_type = payload.get("event_type", "action")
+    if event_type == "strategy_update":
+        return "strategy"
+    if event_type == "conversion_attempt":
+        return "engagement"
+    if event_type in {"dm_sent", "email_sent"}:
+        return "outreach"
+    if event_type in {"response_posted", "response_pending_review"}:
+        return "engagement"
+    if event_type in {"intent_detected", "skip", "response_skipped"}:
+        return "research"
+    return "other"
+
+
+def normalize_agent_event_payload(campaign: Campaign, payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_event_type = payload.get("event_type") or "action"
+    if normalized_event_type not in {"action", "strategy_update", "conversion_attempt"}:
+        normalized_event_type = "action"
+    surface = payload.get("surface") or "other"
+    category = payload.get("category") or default_event_category(payload)
+    description = payload.get("description") or default_event_description(payload)
+    referral_url = payload.get("referral_url")
+    interaction_id = parse_interaction_id(referral_url)
+    event_id = interaction_id or str(uuid4())
+    return {
+        "id": event_id,
+        "event_type": normalized_event_type,
+        "category": category,
+        "surface": surface,
+        "description": description,
+        "source_url": payload.get("source_url"),
+        "source_content": payload.get("source_content"),
+        "source_author": payload.get("source_author"),
+        "target_audience": payload.get("target_audience")
+        or payload.get("subreddit_or_channel")
+        or payload.get("source_author"),
+        "product_id": payload.get("product_id"),
+        "referral_url": referral_url,
+        "response_text": payload.get("response_text"),
+        "tokens_used": int(payload.get("tokens_used", 0) or 0),
+        "compute_cost_usd": float(payload.get("compute_cost_usd", 0.0) or 0.0),
+        "expected_impact": payload.get("expected_impact")
+        or (
+            "high"
+            if float(payload.get("intent_score", {}).get("composite", 0.0) or 0.0) >= 80
+            else "medium"
+            if float(payload.get("intent_score", {}).get("composite", 0.0) or 0.0) >= 60
+            else "low"
+        ),
+        "details": {
+            "raw_event_type": payload.get("event_type"),
+            "subreddit_or_channel": payload.get("subreddit_or_channel"),
+            "source_context": payload.get("source_context"),
+            "intent_score": payload.get("intent_score", {}),
+            "action_taken": payload.get("action_taken"),
+            "channels_used": payload.get("channels_used", []),
+            "total_actions": payload.get("total_actions"),
+            "campaign_status": campaign.status,
+        },
+    }
+
+
+def persist_agent_event(
+    db: Session,
+    campaign: Campaign,
+    payload: dict[str, Any],
+    created_at: datetime,
+) -> AgentEvent:
+    normalized = normalize_agent_event_payload(campaign, payload)
+    event = db.scalar(select(AgentEvent).where(AgentEvent.id == normalized["id"]))
+    if event is None:
+        event = AgentEvent(
+            id=normalized["id"],
+            campaign_id=campaign.id,
+            event_type=normalized["event_type"],
+            category=normalized["category"],
+            surface=normalized["surface"],
+            description=normalized["description"],
+            source_url=normalized["source_url"],
+            source_content=normalized["source_content"],
+            source_author=normalized["source_author"],
+            target_audience=normalized["target_audience"],
+            product_id=normalized["product_id"],
+            referral_url=normalized["referral_url"],
+            response_text=normalized["response_text"],
+            tokens_used=normalized["tokens_used"],
+            compute_cost_usd=normalized["compute_cost_usd"],
+            expected_impact=normalized["expected_impact"],
+            details=normalized["details"],
+            created_at=created_at,
+        )
+        db.add(event)
+        db.flush()
+        return event
+
+    event.event_type = normalized["event_type"]
+    event.category = normalized["category"]
+    event.surface = normalized["surface"]
+    event.description = normalized["description"]
+    event.source_url = normalized["source_url"]
+    event.source_content = normalized["source_content"]
+    event.source_author = normalized["source_author"]
+    event.target_audience = normalized["target_audience"]
+    event.product_id = normalized["product_id"]
+    event.referral_url = normalized["referral_url"]
+    event.response_text = normalized["response_text"]
+    event.tokens_used = normalized["tokens_used"]
+    event.compute_cost_usd = normalized["compute_cost_usd"]
+    event.expected_impact = normalized["expected_impact"]
+    event.details = normalized["details"]
+    event.created_at = created_at
+    return event
+
+
+def simulate_click_and_conversion_for_event(db: Session, event: AgentEvent) -> None:
+    if not event.product_id or not event.referral_url or event.event_type != "action":
+        return
+    existing_click = db.scalar(
+        select(Click).where(
+            Click.campaign_id == event.campaign_id,
+            Click.product_id == event.product_id,
+            Click.source == "autonomous_agent",
+            Click.created_at >= event.created_at,
+        )
+    )
+    if existing_click is not None:
+        return
+
+    likelihood = {
+        "high": 62,
+        "medium": 42,
+        "low": 20,
+    }.get(event.expected_impact or "medium", 35)
+    seed = hash_value(event.id)
+    if seed % 100 > likelihood:
+        return
+
+    click_time = ensure_utc(event.created_at) + timedelta(minutes=4 + seed % 35)
+    click = Click(
+        match_id=None,
+        product_id=event.product_id,
+        campaign_id=event.campaign_id,
+        channel="autonomous_agent",
+        source="autonomous_agent",
+        surface=event.surface,
+        created_at=click_time,
+    )
+    db.add(click)
+    db.flush()
+
+    product = db.scalar(select(Product).where(Product.id == event.product_id))
+    if product is None:
+        return
+    if seed % 100 > max(likelihood - 18, 8):
+        return
+
+    conversion = Conversion(
+        click_id=click.id,
+        product_id=event.product_id,
+        campaign_id=event.campaign_id,
+        order_value=round(product.price * (1.0 + (seed % 8) / 20), 2),
+        channel="autonomous_agent",
+        created_at=click_time + timedelta(minutes=10 + seed % 75),
+    )
+    db.add(conversion)
+
+
+def build_strategy_summary(events: list[AgentEvent], created_at: datetime) -> dict[str, Any]:
+    surfaces = sorted({event.surface for event in events if event.surface})
+    categories = Counter(event.category or "other" for event in events)
+    top_category = categories.most_common(1)[0][0] if categories else "action"
+    descriptions = ", ".join(surfaces[:3]) if surfaces else "the highest-fit channels"
+    return {
+        "event_type": "strategy_update",
+        "category": "strategy",
+        "surface": "agent_brain",
+        "description": (
+            f"Focused on {descriptions} today. Logged {len(events)} actions, leaned hardest into "
+            f"{top_category}, and will reallocate toward the channels producing the strongest RoC signal."
+        ),
+        "source_url": None,
+        "source_content": None,
+        "source_author": None,
+        "target_audience": None,
+        "product_id": None,
+        "referral_url": None,
+        "response_text": None,
+        "tokens_used": sum(event.tokens_used for event in events),
+        "compute_cost_usd": round(sum(event.compute_cost_usd for event in events), 4),
+        "expected_impact": "medium",
+        "channels_used": surfaces,
+        "total_actions": len(events),
+        "timestamp": created_at.isoformat(),
+    }
+
+
+def seed_agent_history(db: Session, campaign: Campaign) -> None:
+    existing_event = db.scalar(select(AgentEvent.id).where(AgentEvent.campaign_id == campaign.id).limit(1))
+    if existing_event is not None:
+        return
+
+    now = utcnow()
+    seeded_events: list[AgentEvent] = []
+    for day_offset in range(12, -1, -1):
+        day = now - timedelta(days=day_offset)
+        actions_for_day = 2 + hash_value(f"{campaign.id}:{day.isoformat()}") % 3
+        day_events: list[AgentEvent] = []
+        for index in range(actions_for_day):
+            template = DEMO_AUTONOMOUS_LIBRARY[
+                (hash_value(f"{campaign.id}:{day.isoformat()}:{index}") + index) % len(DEMO_AUTONOMOUS_LIBRARY)
+            ]
+            created_at = day.replace(
+                hour=9 + ((index * 3 + day_offset) % 8),
+                minute=(index * 11 + day_offset * 7) % 60,
+                second=0,
+                microsecond=0,
+            )
+            product = choose_autonomous_product(campaign, template, f"{day.isoformat()}:{index}")
+            referral_url = None
+            if product is not None and template["category"] in {"engagement", "outreach"}:
+                referral_url = (
+                    f"{build_referral_base(product.id)}"
+                    f"?src={template['surface']}&cid={campaign.id}&iid=sim_{hash_value(f'{campaign.id}:{created_at.isoformat()}:{index}')}"
+                )
+            payload = {
+                **template,
+                "event_type": "action",
+                "product_id": product.id if product is not None else None,
+                "referral_url": referral_url,
+                "response_text": (
+                    f"I'm an AI agent for {campaign.brand_voice_profile.get('brand_name') or campaign.merchant.name or 'the brand'} (via Ever)."
+                    if template["category"] in {"engagement", "outreach"}
+                    else None
+                ),
+                "tokens_used": 620 + (hash_value(f"{campaign.id}:{created_at.isoformat()}") % 920),
+                "compute_cost_usd": round(0.003 + ((index + day_offset) % 9) * 0.0022, 4),
+                "timestamp": created_at.isoformat(),
+            }
+            event = persist_agent_event(db, campaign, payload, created_at)
+            day_events.append(event)
+            seeded_events.append(event)
+            simulate_click_and_conversion_for_event(db, event)
+
+        strategy_created_at = day.replace(hour=20, minute=10, second=0, microsecond=0)
+        strategy_payload = build_strategy_summary(day_events, strategy_created_at)
+        strategy_event = persist_agent_event(db, campaign, strategy_payload, strategy_created_at)
+        seeded_events.append(strategy_event)
+
+    campaign.listener_started_at = campaign.listener_started_at or now - timedelta(days=13)
+    campaign.listener_last_polled_at = now
+    campaign.budget_spent = round(sum(event.compute_cost_usd for event in seeded_events), 2)
+
+
+def maybe_generate_fresh_agent_events(db: Session, campaign: Campaign, force: bool = False) -> None:
+    if campaign.listener_status != "running":
+        return
+    now = utcnow()
+    if not force and campaign.listener_last_polled_at is not None:
+        elapsed = (now - ensure_utc(campaign.listener_last_polled_at)).total_seconds()
+        if elapsed < 180:
+            return
+
+    max_actions = int(campaign.listener_config.get("max_actions_per_day") or 50)
+    day_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc)
+    actions_today = db.scalars(
+        select(AgentEvent).where(
+            AgentEvent.campaign_id == campaign.id,
+            AgentEvent.event_type == "action",
+            AgentEvent.created_at >= day_start,
+        )
+    ).all()
+    remaining_slots = max(max_actions - len(actions_today), 0)
+    if remaining_slots <= 0:
+        campaign.listener_last_polled_at = now
+        return
+
+    to_create = min(remaining_slots, 1 + hash_value(f"{campaign.id}:{now.isoformat()}") % 2)
+    new_events: list[AgentEvent] = []
+    for index in range(to_create):
+        template = DEMO_AUTONOMOUS_LIBRARY[
+            (hash_value(f"{campaign.id}:{now.isoformat()}:{index}") + index) % len(DEMO_AUTONOMOUS_LIBRARY)
+        ]
+        created_at = now - timedelta(minutes=10 - index * 4)
+        product = choose_autonomous_product(campaign, template, f"{campaign.id}:{created_at.isoformat()}:{index}")
+        referral_url = None
+        if product is not None and template["category"] in {"engagement", "outreach"}:
+            referral_url = (
+                f"{build_referral_base(product.id)}"
+                f"?src={template['surface']}&cid={campaign.id}&iid=live_{uuid4().hex[:12]}"
+            )
+        payload = {
+            **template,
+            "event_type": "action",
+            "product_id": product.id if product is not None else None,
+            "referral_url": referral_url,
+            "response_text": (
+                f"I'm an AI agent for {campaign.brand_voice_profile.get('brand_name') or campaign.merchant.name or 'the brand'} (via Ever)."
+                if template["category"] in {"engagement", "outreach"}
+                else None
+            ),
+            "tokens_used": 540 + (hash_value(f"{campaign.id}:{created_at.isoformat()}") % 780),
+            "compute_cost_usd": round(0.0025 + ((index + now.hour) % 7) * 0.0024, 4),
+            "timestamp": created_at.isoformat(),
+        }
+        event = persist_agent_event(db, campaign, payload, created_at)
+        new_events.append(event)
+        simulate_click_and_conversion_for_event(db, event)
+
+    strategy_today = db.scalar(
+        select(AgentEvent.id).where(
+            AgentEvent.campaign_id == campaign.id,
+            AgentEvent.event_type == "strategy_update",
+            AgentEvent.created_at >= day_start,
+        )
+    )
+    if strategy_today is None and new_events:
+        strategy_payload = build_strategy_summary(new_events, now)
+        persist_agent_event(db, campaign, strategy_payload, now)
+
+    campaign.listener_last_polled_at = now
+    campaign.budget_spent = round(
+        sum(
+            db.scalars(select(AgentEvent.compute_cost_usd).where(AgentEvent.campaign_id == campaign.id)).all()
+        ),
+        2,
+    )
+
+
 def refresh_simulation_if_needed(db: Session, campaign: Campaign, force: bool = False) -> None:
     if listener_mode(campaign) != "simulation":
         return
     if effective_listener_status(campaign) != "running":
         return
-    seed_listener_history(db, campaign)
-    maybe_generate_fresh_signals(db, campaign, force=force)
+    seed_agent_history(db, campaign)
+    maybe_generate_fresh_agent_events(db, campaign, force=force)
     db.commit()
     db.refresh(campaign)
 
@@ -464,18 +874,12 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
     profile = campaign.brand_voice_profile
     safeguards = campaign.listener_config.get("safeguards", {})
     live_status = effective_listener_status(campaign)
-    surfaces = {
-        surface["type"]: {
-            "enabled": bool(surface.get("enabled", True)),
-            "subreddits": surface.get("subreddits", []),
-            "keywords": surface.get("keywords", []),
-            "search_queries": surface.get("search_queries", []),
-        }
-        for surface in campaign.listener_config.get("surfaces", [])
-    }
     products = []
     for product in get_products_for_campaign(campaign):
         attributes = product.attributes if isinstance(product.attributes, dict) else {}
+        key_selling_points = attributes.get("key_features", [])[:3]
+        if attributes.get("made_in"):
+            key_selling_points.append(f"Made in {attributes['made_in']}")
         products.append(
             {
                 "id": product.id,
@@ -489,6 +893,7 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
                 "activities": attributes.get("activities", []),
                 "url": product.source_url,
                 "referral_base": build_referral_base(product.id),
+                "key_selling_points": key_selling_points,
             }
         )
 
@@ -506,21 +911,6 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
             "disclosure": build_brand_disclosure(campaign),
         },
         "products": products,
-        "surfaces": surfaces,
-        "rules": {
-            "intent_threshold": int(campaign.listener_config.get("thresholds", {}).get("composite_min", 60)),
-            "max_responses_per_surface_per_day": int(safeguards.get("max_responses_per_surface_per_day", 10)),
-            "max_responses_per_subreddit_per_day": int(safeguards.get("max_responses_per_surface_per_day", 10)),
-            "max_responses_per_day": int(safeguards.get("max_responses_per_day", 50)),
-            "min_minutes_between_responses_same_surface": int(safeguards.get("minimum_minutes_between_surface_responses", 5)),
-            "never_respond_to_same_author_within_hours": int(safeguards.get("never_respond_to_same_author_within_hours", 24)),
-            "never_respond_to_posts_younger_than_minutes": int(safeguards.get("minimum_post_age_minutes", 10)),
-            "max_responses_per_thread": int(safeguards.get("max_thread_replies", 2)),
-            "always_disclose": bool(safeguards.get("always_disclose_ai", True)),
-            "pause_if_downvote_rate_exceeds": float(safeguards.get("pause_if_downvote_rate_exceeds", 0.2)),
-            "review_mode": campaign.listener_config.get("review_mode", "auto") == "manual",
-            "auto_post_confidence_threshold": int(safeguards.get("auto_post_confidence_threshold", 70)),
-        },
         "budget": {
             "monthly": campaign.budget_monthly,
             "spent": round(campaign.budget_spent, 2),
@@ -530,6 +920,16 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
         "reporting": {
             "events_endpoint": f"{settings.public_api_url}/api/campaigns/{campaign.id}/events",
             "api_key": api_key,
+        },
+        "constraints": {
+            "always_disclose_ai": bool(safeguards.get("always_disclose_ai", True)),
+            "always_use_referral_links": True,
+            "never_spam": True,
+            "never_disparage_competitors": True,
+            "max_actions_per_day": int(
+                campaign.listener_config.get("max_actions_per_day")
+                or safeguards.get("max_actions_per_day", 50)
+            ),
         },
     }
 
@@ -1028,21 +1428,15 @@ def record_agent_event(
             "listener_mode": "live",
         }
     created_at = parse_event_timestamp(payload["timestamp"])
-    signal, incremental_cost = upsert_signal_from_event(db, campaign, payload, created_at)
-    response, response_cost, response_became_approved = create_response_from_event(
-        db,
-        campaign,
-        signal,
-        payload,
-        created_at,
+    event = persist_agent_event(db, campaign, payload, created_at)
+    campaign.budget_spent = round(
+        sum(
+            db.scalars(
+                select(AgentEvent.compute_cost_usd).where(AgentEvent.campaign_id == campaign.id)
+            ).all()
+        ),
+        2,
     )
-    incremental_cost += response_cost
-
-    if response is not None and response_became_approved:
-        campaign.approved_response_count += 1
-        simulate_click_and_conversion(db, response)
-
-    campaign.budget_spent = round(campaign.budget_spent + incremental_cost, 2)
     campaign.listener_last_polled_at = utcnow()
     next_status = effective_listener_status(campaign)
     campaign.listener_status = "running" if next_status == "running" else next_status
@@ -1051,7 +1445,7 @@ def record_agent_event(
     db.refresh(campaign)
     budget_left = budget_remaining(campaign)
     return {
-        "event_id": signal.id,
+        "event_id": event.id,
         "status": "recorded",
         "budget_remaining": budget_left,
         "budget_exhausted": budget_left <= 0,
@@ -1159,8 +1553,11 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
     if refresh:
         refresh_simulation_if_needed(db, campaign)
     today_start = datetime.combine(utcnow().date(), datetime.min.time(), tzinfo=timezone.utc)
-    signals_today = db.scalars(
-        select(IntentSignal).where(IntentSignal.campaign_id == campaign.id, IntentSignal.created_at >= today_start)
+    events_today = db.scalars(
+        select(AgentEvent).where(
+            AgentEvent.campaign_id == campaign.id,
+            AgentEvent.created_at >= today_start,
+        )
     ).all()
     pending_responses = db.scalars(
         select(AgentResponse).where(
@@ -1168,37 +1565,23 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
             AgentResponse.review_status == "pending",
         )
     ).all()
-    responses_today = db.scalars(
-        select(AgentResponse).where(
-            AgentResponse.campaign_id == campaign.id,
-            AgentResponse.created_at >= today_start,
-        )
-    ).all()
-    responses_posted_today = [response for response in responses_today if response.posted]
-    compute_spent_today = round(
-        sum(signal.scoring_cost for signal in signals_today)
-        + sum(response.generation_cost for response in responses_today),
-        2,
-    )
-    active_surfaces = [
-        surface["type"]
-        for surface in campaign.listener_config.get("surfaces", [])
-        if surface.get("enabled", True)
+    actions_today = [event for event in events_today if event.event_type == "action"]
+    strategy_updates_today = [event for event in events_today if event.event_type == "strategy_update"]
+    response_like_actions = [
+        event
+        for event in actions_today
+        if event.category in {"engagement", "outreach"} and (event.response_text or event.referral_url)
     ]
-    latest_signal = db.scalar(
-        select(IntentSignal.created_at)
-        .where(IntentSignal.campaign_id == campaign.id)
-        .order_by(IntentSignal.created_at.desc())
-        .limit(1)
-    )
-    latest_response = db.scalar(
-        select(AgentResponse.created_at)
-        .where(AgentResponse.campaign_id == campaign.id)
-        .order_by(AgentResponse.created_at.desc())
+    compute_spent_today = round(sum(event.compute_cost_usd for event in events_today), 2)
+    active_surfaces = sorted({event.surface for event in events_today if event.surface})
+    latest_event = db.scalar(
+        select(AgentEvent.created_at)
+        .where(AgentEvent.campaign_id == campaign.id)
+        .order_by(AgentEvent.created_at.desc())
         .limit(1)
     )
     last_active = max(
-        [value for value in [campaign.listener_last_polled_at, latest_signal, latest_response] if value is not None],
+        [value for value in [campaign.listener_last_polled_at, latest_event] if value is not None],
         default=None,
     )
     current_status = effective_listener_status(campaign)
@@ -1212,13 +1595,17 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
         "status": current_status,
         "last_active": last_active.isoformat() if last_active else None,
         "last_polled_at": campaign.listener_last_polled_at.isoformat() if campaign.listener_last_polled_at else None,
+        "actions_today": len(actions_today),
+        "strategy_updates_today": len(strategy_updates_today),
+        "active_surfaces": active_surfaces,
+        "active_surface_count": len(active_surfaces),
         "surfaces_active": active_surfaces,
         "surfaces_active_count": len(active_surfaces),
-        "signals_today": len(signals_today),
-        "responses_today": len(responses_posted_today),
+        "signals_today": len(actions_today),
+        "responses_today": len(response_like_actions),
         "budget_remaining": budget_remaining(campaign),
         "uptime_hours": uptime_hours,
-        "signals_detected_today": len(signals_today),
+        "signals_detected_today": len(actions_today),
         "responses_pending_review": len(pending_responses),
         "compute_spent_today": compute_spent_today,
         "approved_response_count": campaign.approved_response_count,
@@ -1236,8 +1623,8 @@ def start_listener(db: Session, campaign: Campaign) -> dict[str, Any]:
         launch_openclaw_agent(campaign, api_key)
     else:
         stop_openclaw_agent(campaign.id)
-        seed_listener_history(db, campaign)
-        maybe_generate_fresh_signals(db, campaign, force=True)
+        seed_agent_history(db, campaign)
+        maybe_generate_fresh_agent_events(db, campaign, force=True)
     db.commit()
     db.refresh(campaign)
     return build_listener_status(db, campaign, refresh=False)
@@ -1363,53 +1750,49 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
     period_map = {"7d": 7, "30d": 30, "90d": 90}
     days = period_map.get(period, 120)
     start_at = utcnow() - timedelta(days=days - 1)
-
-    signals = db.scalars(
-        select(IntentSignal)
-        .where(IntentSignal.campaign_id == campaign.id, IntentSignal.created_at >= start_at)
-        .options(joinedload(IntentSignal.product))
-        .order_by(IntentSignal.created_at.asc())
-    ).all()
-    responses = db.scalars(
-        select(AgentResponse)
-        .where(AgentResponse.campaign_id == campaign.id, AgentResponse.created_at >= start_at)
-        .options(joinedload(AgentResponse.product), joinedload(AgentResponse.signal))
-        .order_by(AgentResponse.created_at.asc())
+    events = db.scalars(
+        select(AgentEvent)
+        .where(AgentEvent.campaign_id == campaign.id, AgentEvent.created_at >= start_at)
+        .options(joinedload(AgentEvent.product))
+        .order_by(AgentEvent.created_at.asc())
     ).all()
     clicks = db.scalars(
         select(Click)
         .where(
             Click.campaign_id == campaign.id,
-            Click.source == "intent_listener",
             Click.created_at >= start_at,
+            Click.source.in_(["autonomous_agent", "intent_listener"]),
         )
-        .options(joinedload(Click.product), joinedload(Click.response).joinedload(AgentResponse.signal))
+        .options(joinedload(Click.product))
     ).all()
     conversions = db.scalars(
         select(Conversion)
-        .join(Click, Conversion.click_id == Click.id, isouter=True)
         .where(
             Conversion.campaign_id == campaign.id,
-            Conversion.channel == "intent_listener",
             Conversion.created_at >= start_at,
+            Conversion.channel.in_(["autonomous_agent", "intent_listener"]),
         )
-        .options(joinedload(Conversion.product))
+        .options(joinedload(Conversion.product), joinedload(Conversion.click))
+    ).all()
+    pending_responses = db.scalars(
+        select(AgentResponse).where(
+            AgentResponse.campaign_id == campaign.id,
+            AgentResponse.review_status == "pending",
+        )
     ).all()
 
-    responses_sent = [response for response in responses if response.posted]
-    reviewed = [response for response in responses if response.review_status != "pending"]
-    approved = [response for response in responses if response.review_status in {"approved", "auto_approved"}]
+    action_events = [event for event in events if event.event_type == "action"]
+    strategy_events = [event for event in events if event.event_type == "strategy_update"]
+    response_actions = [
+        event for event in action_events if event.category in {"engagement", "outreach"}
+    ]
     revenue = round(sum(conversion.order_value for conversion in conversions), 2)
-    compute_cost = round(
-        sum(signal.scoring_cost for signal in signals)
-        + sum(response.generation_cost for response in responses),
-        2,
-    )
+    compute_cost = round(sum(event.compute_cost_usd for event in events), 2)
     roc = round(revenue / compute_cost, 2) if compute_cost else 0.0
 
     surface_stats: dict[str, dict[str, float | int | str | None]] = defaultdict(
         lambda: {
-            "surface": "",
+            "surface": "other",
             "subreddit": None,
             "query": None,
             "subreddit_or_channel": None,
@@ -1423,7 +1806,17 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             "roc": 0.0,
         }
     )
-    subreddit_counter: Counter[str] = Counter()
+    channel_breakdown: dict[str, dict[str, float | int | str]] = defaultdict(
+        lambda: {
+            "surface": "other",
+            "actions": 0,
+            "clicks": 0,
+            "conversions": 0,
+            "revenue": 0.0,
+            "compute_cost": 0.0,
+            "return_on_compute": 0.0,
+        }
+    )
     product_stats: dict[str, dict[str, float | int | str | None]] = defaultdict(
         lambda: {
             "product_id": None,
@@ -1440,55 +1833,41 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         }
     )
 
-    response_lookup = {response.id: response for response in responses}
+    for event in action_events:
+        surface = event.surface or "other"
+        surface_row = surface_stats[surface]
+        surface_row["surface"] = surface
+        surface_row["subreddit_or_channel"] = surface
+        surface_row["signals_detected"] += 1
+        surface_row["compute_cost"] += event.compute_cost_usd
+        if event.category in {"engagement", "outreach"}:
+            surface_row["responses"] += 1
+            surface_row["responses_sent"] += 1
 
-    for signal in signals:
-        channel_key = signal.subreddit_or_channel or signal.surface
-        stats = surface_stats[f"{signal.surface}:{channel_key}"]
-        stats["surface"] = signal.surface
-        stats["subreddit_or_channel"] = channel_key
-        if signal.surface == "reddit":
-            stats["subreddit"] = channel_key
-        elif signal.surface == "twitter":
-            stats["query"] = channel_key
-        stats["signals_detected"] += 1
-        stats["compute_cost"] += signal.scoring_cost
-        if signal.subreddit_or_channel:
-            subreddit_counter[signal.subreddit_or_channel] += 1
+        channel_row = channel_breakdown[surface]
+        channel_row["surface"] = surface
+        channel_row["actions"] += 1
+        channel_row["compute_cost"] += event.compute_cost_usd
 
-    for response in responses_sent:
-        channel_key = response.signal.subreddit_or_channel if response.signal else response.surface
-        stats = surface_stats[f"{response.surface}:{channel_key}"]
-        stats["surface"] = response.surface
-        stats["subreddit_or_channel"] = channel_key
-        if response.surface == "reddit":
-            stats["subreddit"] = channel_key
-        elif response.surface == "twitter":
-            stats["query"] = channel_key
-        stats["responses"] += 1
-        stats["responses_sent"] += 1
-        stats["compute_cost"] += response.generation_cost
-        if response.product_id:
-            product_row = product_stats[response.product_id]
-            product_row["product_id"] = response.product_id
-            product_row["name"] = response.product.name if response.product else "Product"
-            product_row["product_name"] = response.product.name if response.product else "Product"
-            product_row["surface"] = response.surface
+        if event.product_id:
+            product_row = product_stats[event.product_id]
+            product_row["product_id"] = event.product_id
+            product_row["name"] = event.product.name if event.product else "Product"
+            product_row["product_name"] = event.product.name if event.product else "Product"
+            product_row["surface"] = surface
             product_row["responses"] += 1
-            product_row["responses_sent"] += 1
-            product_row["compute_cost"] += response.generation_cost
+            if event.category in {"engagement", "outreach"}:
+                product_row["responses_sent"] += 1
+            product_row["compute_cost"] += event.compute_cost_usd
 
     for click in clicks:
-        surface = click.surface or "reddit"
-        channel_key = click.response.signal.subreddit_or_channel if click.response and click.response.signal else surface
-        surface_stats[f"{surface}:{channel_key}"]["surface"] = surface
-        surface_stats[f"{surface}:{channel_key}"]["subreddit_or_channel"] = channel_key
-        if surface == "reddit":
-            surface_stats[f"{surface}:{channel_key}"]["subreddit"] = channel_key
-        elif surface == "twitter":
-            surface_stats[f"{surface}:{channel_key}"]["query"] = channel_key
-        surface_stats[f"{surface}:{channel_key}"]["clicks"] += 1
-        if click.response_id and click.response_id in response_lookup and click.product_id:
+        surface = click.surface or "other"
+        surface_stats[surface]["surface"] = surface
+        surface_stats[surface]["subreddit_or_channel"] = surface
+        surface_stats[surface]["clicks"] += 1
+        channel_breakdown[surface]["surface"] = surface
+        channel_breakdown[surface]["clicks"] += 1
+        if click.product_id:
             product_row = product_stats[click.product_id]
             product_row["product_id"] = click.product_id
             product_row["name"] = click.product.name if click.product else "Product"
@@ -1497,17 +1876,14 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             product_row["clicks"] += 1
 
     for conversion in conversions:
-        click = next((click for click in clicks if click.id == conversion.click_id), None)
-        surface = click.surface if click and click.surface else "reddit"
-        channel_key = click.response.signal.subreddit_or_channel if click and click.response and click.response.signal else surface
-        surface_stats[f"{surface}:{channel_key}"]["surface"] = surface
-        surface_stats[f"{surface}:{channel_key}"]["subreddit_or_channel"] = channel_key
-        if surface == "reddit":
-            surface_stats[f"{surface}:{channel_key}"]["subreddit"] = channel_key
-        elif surface == "twitter":
-            surface_stats[f"{surface}:{channel_key}"]["query"] = channel_key
-        surface_stats[f"{surface}:{channel_key}"]["conversions"] += 1
-        surface_stats[f"{surface}:{channel_key}"]["revenue"] += conversion.order_value
+        surface = conversion.click.surface if conversion.click and conversion.click.surface else "other"
+        surface_stats[surface]["surface"] = surface
+        surface_stats[surface]["subreddit_or_channel"] = surface
+        surface_stats[surface]["conversions"] += 1
+        surface_stats[surface]["revenue"] += conversion.order_value
+        channel_breakdown[surface]["surface"] = surface
+        channel_breakdown[surface]["conversions"] += 1
+        channel_breakdown[surface]["revenue"] += conversion.order_value
         product_row = product_stats[conversion.product_id]
         product_row["product_id"] = conversion.product_id
         product_row["name"] = conversion.product.name if conversion.product else "Product"
@@ -1525,34 +1901,29 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             else 0.0
         )
 
+    for stats in channel_breakdown.values():
+        stats["revenue"] = round(float(stats["revenue"]), 2)
+        stats["compute_cost"] = round(float(stats["compute_cost"]), 2)
+        stats["return_on_compute"] = (
+            round(float(stats["revenue"]) / float(stats["compute_cost"]), 2)
+            if float(stats["compute_cost"])
+            else 0.0
+        )
+
     for row in product_stats.values():
         row["revenue"] = round(float(row["revenue"]), 2)
         row["compute_cost"] = round(float(row["compute_cost"]), 2)
-        row["roc"] = round(float(row["revenue"]) / float(row["compute_cost"]), 2) if float(row["compute_cost"]) else 0.0
-
-    score_buckets = {
-        "0-24": 0,
-        "25-49": 0,
-        "50-69": 0,
-        "70-84": 0,
-        "85-100": 0,
-    }
-    for signal in signals:
-        score = signal.composite_score
-        if score < 25:
-            score_buckets["0-24"] += 1
-        elif score < 50:
-            score_buckets["25-49"] += 1
-        elif score < 70:
-            score_buckets["50-69"] += 1
-        elif score < 85:
-            score_buckets["70-84"] += 1
-        else:
-            score_buckets["85-100"] += 1
+        row["roc"] = (
+            round(float(row["revenue"]) / float(row["compute_cost"]), 2)
+            if float(row["compute_cost"])
+            else 0.0
+        )
 
     daily_map: dict[str, dict[str, float | int | str]] = defaultdict(
         lambda: {
             "date": "",
+            "actions_reported": 0,
+            "strategy_updates": 0,
             "signals_detected": 0,
             "responses_sent": 0,
             "clicks": 0,
@@ -1561,17 +1932,18 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             "compute_cost": 0.0,
         }
     )
-    for signal in signals:
-        key = ensure_utc(signal.created_at).date().isoformat()
+    for event in action_events:
+        key = ensure_utc(event.created_at).date().isoformat()
         daily_map[key]["date"] = key
+        daily_map[key]["actions_reported"] += 1
         daily_map[key]["signals_detected"] += 1
-        daily_map[key]["compute_cost"] += signal.scoring_cost
-    for response in responses:
-        key = ensure_utc(response.created_at).date().isoformat()
-        daily_map[key]["date"] = key
-        if response.posted:
+        if event.category in {"engagement", "outreach"}:
             daily_map[key]["responses_sent"] += 1
-        daily_map[key]["compute_cost"] += response.generation_cost
+        daily_map[key]["compute_cost"] += event.compute_cost_usd
+    for event in strategy_events:
+        key = ensure_utc(event.created_at).date().isoformat()
+        daily_map[key]["date"] = key
+        daily_map[key]["strategy_updates"] += 1
     for click in clicks:
         key = ensure_utc(click.created_at).date().isoformat()
         daily_map[key]["date"] = key
@@ -1593,26 +1965,55 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
 
     return {
         "period": period,
-        "signals_detected": len(signals),
-        "responses_sent": len(responses_sent),
-        "responses_pending_review": sum(1 for response in responses if response.review_status == "pending"),
-        "approval_rate": round(len(approved) / len(reviewed), 4) if reviewed else 0.0,
-        "response_rate": round(len(responses_sent) / len(signals), 4) if signals else 0.0,
+        "actions_reported": len(action_events),
+        "strategy_updates": len(strategy_events),
+        "signals_detected": len(action_events),
+        "responses_sent": len(response_actions),
+        "responses_pending_review": len(pending_responses),
+        "approval_rate": 1.0,
+        "response_rate": round(len(response_actions) / len(action_events), 4) if action_events else 0.0,
         "clicks": len(clicks),
-        "click_through_rate": round(len(clicks) / len(responses_sent), 4) if responses_sent else 0.0,
+        "click_through_rate": round(len(clicks) / len(response_actions), 4) if response_actions else 0.0,
         "conversions": len(conversions),
         "conversion_rate": round(len(conversions) / len(clicks), 4) if clicks else 0.0,
         "revenue": revenue,
         "compute_cost": compute_cost,
         "return_on_compute": roc,
-        "top_surfaces": sorted(surface_stats.values(), key=lambda item: (item["revenue"], item["signals_detected"]), reverse=True)[:4],
-        "top_products": sorted(product_stats.values(), key=lambda item: (item["revenue"], item["responses_sent"]), reverse=True)[:5],
+        "top_surfaces": sorted(
+            surface_stats.values(),
+            key=lambda item: (float(item["roc"]), float(item["revenue"]), int(item["signals_detected"])),
+            reverse=True,
+        )[:6],
+        "top_products": sorted(
+            product_stats.values(),
+            key=lambda item: (float(item["roc"]), float(item["revenue"]), int(item["responses_sent"])),
+            reverse=True,
+        )[:6],
         "top_subreddits": [
-            {"label": label, "count": count}
-            for label, count in subreddit_counter.most_common(5)
+            {"label": row["surface"], "count": int(row["actions"])}
+            for row in sorted(
+                channel_breakdown.values(),
+                key=lambda item: (float(item["return_on_compute"]), int(item["actions"])),
+                reverse=True,
+            )[:5]
         ],
-        "intent_score_distribution": [
-            {"label": label, "count": count} for label, count in score_buckets.items()
+        "intent_score_distribution": [],
+        "channel_breakdown": sorted(
+            channel_breakdown.values(),
+            key=lambda item: (float(item["return_on_compute"]), float(item["revenue"]), int(item["actions"])),
+            reverse=True,
+        ),
+        "strategy_feed": [
+            {
+                "id": event.id,
+                "description": event.description,
+                "channels_used": list(event.details.get("channels_used", [])),
+                "total_actions": int(event.details.get("total_actions") or 0),
+                "compute_cost": round(event.compute_cost_usd, 4),
+                "timestamp": event.created_at.isoformat(),
+                "relative_time": relative_time(event.created_at),
+            }
+            for event in sorted(strategy_events, key=lambda item: item.created_at, reverse=True)[:8]
         ],
         "daily": daily,
         "daily_series": daily,

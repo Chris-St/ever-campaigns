@@ -24,9 +24,9 @@ def test_full_flow() -> None:
     init_db()
     client = TestClient(app)
     now = datetime.now(timezone.utc)
-    signal_timestamp = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
-    response_timestamp = (now - timedelta(minutes=26)).isoformat().replace("+00:00", "Z")
-    skipped_timestamp = (now - timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
+    research_timestamp = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    action_timestamp = (now - timedelta(minutes=22)).isoformat().replace("+00:00", "Z")
+    strategy_timestamp = (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
 
     signup = client.post(
         "/auth/signup",
@@ -75,7 +75,7 @@ def test_full_flow() -> None:
     listener_status = client.get(f"/campaigns/{campaign_id}/listener/status", headers=headers)
     assert listener_status.status_code == 200
     assert listener_status.json()["status"] == "stopped"
-    assert listener_status.json()["surfaces_active_count"] >= 2
+    assert listener_status.json()["surfaces_active_count"] == 0
     assert listener_status.json()["config"]["listener_mode"] == "simulation"
 
     updated_listener = client.put(
@@ -96,7 +96,7 @@ def test_full_flow() -> None:
     assert started_listener.status_code == 200
     started_listener_json = started_listener.json()
     assert started_listener_json["status"] == "running"
-    assert started_listener_json["surfaces_active_count"] >= 2
+    assert started_listener_json["surfaces_active_count"] == 0
 
     manifest_path = campaign_manifest_path(campaign_id)
     runtime_config_path = campaign_runtime_config_path(campaign_id)
@@ -115,10 +115,10 @@ def test_full_flow() -> None:
     assert openclaw_skill.status_code == 200
     assert openclaw_skill.headers["content-type"].startswith("text/markdown")
     openclaw_skill_text = openclaw_skill.text
+    assert "Ever Autonomous Sales Agent" in openclaw_skill_text
     assert "/agent-config" in openclaw_skill_text
-    assert "Anti-Spam" in openclaw_skill_text
-    assert "Reddit-Specific Rules" in openclaw_skill_text
-    assert "EverAgentBia" in openclaw_skill_text
+    assert "Which channels and platforms to use" in openclaw_skill_text
+    assert "Reddit-Specific Rules" not in openclaw_skill_text
 
     openclaw_skill_bundle = client.get(
         f"/api/campaigns/{campaign_id}/openclaw-skill?format=bundle",
@@ -129,8 +129,7 @@ def test_full_flow() -> None:
     assert openclaw_skill_json["campaign_id"] == campaign_id
     assert openclaw_skill_json["config_json"]["api_key"] == agent_api_key
     assert openclaw_skill_json["config_json"]["ever_api"]["api_key"] == agent_api_key
-    assert "reddit" in openclaw_skill_json["config_json"]
-    assert openclaw_skill_json["config_json"]["reddit"]["username"] == "EverAgentBia"
+    assert "reddit" not in openclaw_skill_json["config_json"]
 
     openclaw_config = client.get(
         f"/api/campaigns/{campaign_id}/openclaw-skill?format=config",
@@ -152,102 +151,80 @@ def test_full_flow() -> None:
     assert agent_config_json["status"] == "running"
     assert agent_config_json["reporting"]["api_key"] == agent_api_key
     assert agent_config_json["brand"]["story"]
-    assert agent_config_json["surfaces"]["reddit"]["enabled"] is True
-    assert agent_config_json["rules"]["max_responses_per_surface_per_day"] >= 1
-    assert agent_config_json["rules"]["always_disclose"] is True
+    assert "surfaces" not in agent_config_json
+    assert "rules" not in agent_config_json
+    assert agent_config_json["constraints"]["always_disclose_ai"] is True
+    assert agent_config_json["constraints"]["max_actions_per_day"] >= 1
+    assert agent_config_json["budget"]["remaining"] > 0
     assert "attributes" in agent_config_json["products"][0]
+    assert len(agent_config_json["products"][0]["key_selling_points"]) >= 1
     product_id = agent_config_json["products"][0]["id"]
 
-    intent_detected = client.post(
+    research_event = client.post(
         f"/api/campaigns/{campaign_id}/events",
         headers=agent_headers,
         json={
-            "event_type": "intent_detected",
-            "surface": "reddit",
-            "source_url": "https://reddit.com/r/running/comments/test123",
-            "source_content": "What underwear doesn't chafe on long runs?",
-            "source_author": "u/runner_jane",
-            "source_context": "Thread about marathon training gear",
-            "subreddit_or_channel": "r/running",
-            "intent_score": {
-                "relevance": 85,
-                "intent": 72,
-                "fit": 90,
-                "receptivity": 80,
-                "composite": 82,
-            },
-            "action_taken": "skip",
-            "response_text": None,
-            "referral_url": None,
-                "product_id": product_id,
-                "tokens_used": 620,
-                "compute_cost_usd": 0.0046,
-                "timestamp": signal_timestamp,
-            },
-        )
-    assert intent_detected.status_code == 200
-    assert intent_detected.json()["status"] == "recorded"
+            "event_type": "action",
+            "category": "research",
+            "surface": "forum",
+            "description": "Reviewed a premium-basics forum thread to gauge fit before engaging.",
+            "source_url": "https://forum.ever.local/thread/test123",
+            "source_content": "Looking for premium workout underwear that still feels good all day.",
+            "source_author": "forum:movementclub",
+            "target_audience": "Women buying premium active basics",
+            "product_id": product_id,
+            "tokens_used": 620,
+            "compute_cost_usd": 0.0046,
+            "expected_impact": "medium",
+            "timestamp": research_timestamp,
+        },
+    )
+    assert research_event.status_code == 200
+    assert research_event.json()["status"] == "recorded"
 
-    response_posted = client.post(
+    response_action = client.post(
         f"/api/campaigns/{campaign_id}/events",
         headers=agent_headers,
         json={
-            "event_type": "response_posted",
+            "event_type": "action",
+            "category": "engagement",
             "surface": "reddit",
+            "description": "Posted a helpful reply in a running thread after confirming product fit.",
             "source_url": "https://reddit.com/r/running/comments/test123",
             "source_content": "What underwear doesn't chafe on long runs?",
             "source_author": "u/runner_jane",
-            "source_context": "Thread about marathon training gear",
-            "subreddit_or_channel": "r/running",
-            "intent_score": {
-                "relevance": 85,
-                "intent": 72,
-                "fit": 90,
-                "receptivity": 80,
-                "composite": 82,
-            },
-            "action_taken": "reply",
+            "target_audience": "Women training for distance running",
             "response_text": "If the goal is comfort during movement, breathable and stay-put matters most. Bia's High Movement Thong is built for running and dries fast. I'm an AI agent for Bia (via Ever).",
             "referral_url": f"http://localhost:8000/go/{product_id}?src=reddit&cid={campaign_id}&iid=reply_evt_1",
-                "product_id": product_id,
-                "tokens_used": 1150,
-                "compute_cost_usd": 0.0082,
-                "timestamp": response_timestamp,
-            },
-        )
-    assert response_posted.status_code == 200
-    assert response_posted.json()["status"] == "recorded"
-    assert response_posted.json()["budget_remaining"] < 2400
-    assert response_posted.json()["event_id"] == intent_detected.json()["event_id"]
+            "product_id": product_id,
+            "tokens_used": 1150,
+            "compute_cost_usd": 0.0082,
+            "expected_impact": "high",
+            "timestamp": action_timestamp,
+        },
+    )
+    assert response_action.status_code == 200
+    assert response_action.json()["status"] == "recorded"
+    assert response_action.json()["budget_remaining"] < 2400
+    assert response_action.json()["event_id"] == "reply_evt_1"
 
-    response_skipped = client.post(
+    strategy_update = client.post(
         f"/api/campaigns/{campaign_id}/events",
         headers=agent_headers,
         json={
-            "event_type": "response_skipped",
-            "surface": "twitter",
-            "source_url": "https://x.com/everagent/status/abc123?query=best%20athletic%20thong",
-            "source_content": "best athletic thong for hot yoga and walking all day?",
-            "source_author": "@studionotes",
-            "source_context": "Looking for something breathable and soft",
-            "subreddit_or_channel": "best athletic thong",
-            "intent_score": {
-                "relevance": 74,
-                "intent": 68,
-                "fit": 61,
-                "receptivity": 55,
-                "composite": 66,
-            },
-            "action_taken": "skip",
-            "response_text": None,
-            "referral_url": None,
-                "product_id": product_id,
-                "tokens_used": 540,
-                "compute_cost_usd": 0.0035,
-                "timestamp": skipped_timestamp,
-            },
-        )
-    assert response_skipped.status_code == 200
+            "event_type": "strategy_update",
+            "category": "strategy",
+            "surface": "agent_brain",
+            "description": "Focused on Reddit and forum research first, then shifted toward helpful engagement once fit looked strong.",
+            "channels_used": ["reddit", "forum"],
+            "total_actions": 2,
+            "tokens_used": 1770,
+            "compute_cost_usd": 0.0128,
+            "timestamp": strategy_timestamp,
+        },
+    )
+    assert strategy_update.status_code == 200
+    assert strategy_update.json()["status"] == "recorded"
 
     updated_listener_status = client.get(
         f"/campaigns/{campaign_id}/listener/status",
@@ -258,6 +235,8 @@ def test_full_flow() -> None:
     assert updated_listener_status_json["status"] == "running"
     assert updated_listener_status_json["signals_today"] >= 2
     assert updated_listener_status_json["responses_today"] >= 1
+    assert updated_listener_status_json["strategy_updates_today"] >= 1
+    assert updated_listener_status_json["active_surface_count"] >= 2
     assert updated_listener_status_json["last_active"] is not None
 
     redirect = client.get(
@@ -285,33 +264,28 @@ def test_full_flow() -> None:
     listener_analytics_json = listener_analytics.json()
     assert listener_analytics_json["signals_detected"] >= 2
     assert listener_analytics_json["responses_sent"] >= 1
+    assert listener_analytics_json["strategy_updates"] >= 1
     assert listener_analytics_json["clicks"] >= 1
     assert listener_analytics_json["conversions"] >= 1
     assert listener_analytics_json["revenue"] >= 32.0
     assert listener_analytics_json["compute_cost"] > 0
+    assert any(item["surface"] == "reddit" for item in listener_analytics_json["top_surfaces"])
+    assert any(item["surface"] == "forum" for item in listener_analytics_json["top_surfaces"])
     assert any(
-        item["subreddit_or_channel"] == "r/running"
-        for item in listener_analytics_json["top_surfaces"]
+        item["surface"] == "reddit" for item in listener_analytics_json["channel_breakdown"]
     )
     assert any(
-        item["subreddit_or_channel"] == "best athletic thong"
-        for item in listener_analytics_json["top_surfaces"]
+        "reddit" in entry["channels_used"] for entry in listener_analytics_json["strategy_feed"]
     )
     assert len(listener_analytics_json["daily_series"]) >= 1
 
-    response_activity = client.get(
-        f"/campaigns/{campaign_id}/activity?limit=20&event_type=response",
+    action_activity = client.get(
+        f"/campaigns/{campaign_id}/activity?limit=20&event_type=action",
         headers=headers,
     )
-    assert response_activity.status_code == 200
-    assert any(entry["event_type"] == "response" for entry in response_activity.json())
-
-    match_activity = client.get(
-        f"/campaigns/{campaign_id}/activity?limit=20&event_type=match",
-        headers=headers,
-    )
-    assert match_activity.status_code == 200
-    assert any(entry["channel"] == "intent_listener" for entry in match_activity.json())
+    assert action_activity.status_code == 200
+    assert any(entry["event_type"] == "action" for entry in action_activity.json())
+    assert any(entry["surface"] == "reddit" for entry in action_activity.json())
 
     review_queue = client.get(f"/campaigns/{campaign_id}/review", headers=headers)
     assert review_queue.status_code == 200
@@ -374,6 +348,13 @@ def test_full_flow() -> None:
     assert scoped_catalog.status_code == 200
     assert scoped_catalog.json()["scope"] == merchant_slug
     assert len(scoped_catalog.json()["products"]) >= 4
+
+    match_activity = client.get(
+        f"/campaigns/{campaign_id}/activity?limit=20&event_type=match",
+        headers=headers,
+    )
+    assert match_activity.status_code == 200
+    assert any(entry["channel"] == "mcp" for entry in match_activity.json())
 
     acp_feed = client.get(f"/feeds/{merchant_id}/acp.jsonl.gz")
     assert acp_feed.status_code == 200

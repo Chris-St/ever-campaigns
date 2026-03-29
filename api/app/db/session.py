@@ -53,9 +53,63 @@ def ensure_runtime_schema() -> None:
     }
 
     with engine.begin() as connection:
+        if "agent_events" not in table_columns:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE agent_events (
+                        id VARCHAR PRIMARY KEY,
+                        campaign_id VARCHAR NOT NULL,
+                        event_type VARCHAR NOT NULL,
+                        category VARCHAR,
+                        surface VARCHAR,
+                        description TEXT NOT NULL,
+                        source_url TEXT,
+                        source_content TEXT,
+                        source_author VARCHAR,
+                        target_audience TEXT,
+                        product_id VARCHAR,
+                        referral_url TEXT,
+                        response_text TEXT,
+                        tokens_used INTEGER DEFAULT 0,
+                        compute_cost_usd FLOAT DEFAULT 0,
+                        expected_impact VARCHAR,
+                        details JSON,
+                        created_at DATETIME
+                    )
+                    """
+                )
+            )
+            table_columns["agent_events"] = {
+                "id",
+                "campaign_id",
+                "event_type",
+                "category",
+                "surface",
+                "description",
+                "source_url",
+                "source_content",
+                "source_author",
+                "target_audience",
+                "product_id",
+                "referral_url",
+                "response_text",
+                "tokens_used",
+                "compute_cost_usd",
+                "expected_impact",
+                "details",
+                "created_at",
+            }
+
         for (table_name, column_name), statement in alter_statements.items():
             if table_name in table_columns and column_name not in table_columns[table_name]:
                 connection.execute(text(statement))
+
+        if "agent_events" in table_columns or "agent_events" in inspector.get_table_names():
+            agent_event_columns = table_columns.get("agent_events", set())
+            if "details" not in agent_event_columns:
+                connection.execute(text("ALTER TABLE agent_events ADD COLUMN details JSON"))
+            connection.execute(text("UPDATE agent_events SET details = '{}' WHERE details IS NULL"))
 
         for table_name in ("queries", "matches", "clicks", "conversions"):
             if table_name in table_columns or table_name in inspector.get_table_names():

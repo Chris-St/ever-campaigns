@@ -134,6 +134,7 @@ class ListenerThresholds(BaseModel):
 
 
 class ListenerSafeguards(BaseModel):
+    max_actions_per_day: int = 50
     max_responses_per_surface_per_day: int = 10
     max_responses_per_day: int = 50
     max_thread_replies: int = 2
@@ -160,6 +161,8 @@ class ListenerConfig(BaseModel):
     aggressiveness: Literal["conservative", "balanced", "aggressive"] = "balanced"
     review_mode: Literal["manual", "auto"] = "manual"
     auto_post_after_approvals: int = 50
+    max_actions_per_day: int = 50
+    quality_threshold: int = 60
     thresholds: ListenerThresholds = Field(default_factory=ListenerThresholds)
     safeguards: ListenerSafeguards = Field(default_factory=ListenerSafeguards)
     surfaces: list[ListenerSurfaceConfig] = Field(default_factory=list)
@@ -170,6 +173,10 @@ class ListenerStatus(BaseModel):
     status: Literal["running", "stopped", "paused", "budget_exhausted"]
     last_active: str | None = None
     last_polled_at: str | None = None
+    actions_today: int = 0
+    strategy_updates_today: int = 0
+    active_surfaces: list[str] = Field(default_factory=list)
+    active_surface_count: int = 0
     signals_today: int
     responses_today: int
     surfaces_active: list[str] = Field(default_factory=list)
@@ -249,6 +256,8 @@ class ListenerCountBreakdown(BaseModel):
 
 class ListenerAnalyticsPoint(BaseModel):
     date: str
+    actions_reported: int = 0
+    strategy_updates: int = 0
     signals_detected: int
     responses_sent: int
     clicks: int
@@ -257,8 +266,30 @@ class ListenerAnalyticsPoint(BaseModel):
     compute_cost: float
 
 
+class ListenerChannelBreakdown(BaseModel):
+    surface: str
+    actions: int
+    clicks: int
+    conversions: int
+    revenue: float
+    compute_cost: float
+    return_on_compute: float
+
+
+class ListenerStrategyEntry(BaseModel):
+    id: str
+    description: str
+    channels_used: list[str] = Field(default_factory=list)
+    total_actions: int = 0
+    compute_cost: float = 0.0
+    timestamp: str
+    relative_time: str
+
+
 class ListenerAnalytics(BaseModel):
     period: str
+    actions_reported: int = 0
+    strategy_updates: int = 0
     signals_detected: int
     responses_sent: int
     responses_pending_review: int
@@ -275,6 +306,8 @@ class ListenerAnalytics(BaseModel):
     top_products: list[ListenerTopProduct] = Field(default_factory=list)
     top_subreddits: list[ListenerCountBreakdown] = Field(default_factory=list)
     intent_score_distribution: list[ListenerCountBreakdown] = Field(default_factory=list)
+    channel_breakdown: list[ListenerChannelBreakdown] = Field(default_factory=list)
+    strategy_feed: list[ListenerStrategyEntry] = Field(default_factory=list)
     daily: list[ListenerAnalyticsPoint] = Field(default_factory=list)
     daily_series: list[ListenerAnalyticsPoint] = Field(default_factory=list)
 
@@ -293,28 +326,26 @@ class AgentIntentScore(BaseModel):
 
 
 class AgentEventRequest(BaseModel):
-    event_type: Literal[
-        "intent_detected",
-        "response_posted",
-        "response_skipped",
-        "response_pending_review",
-        "dm_sent",
-        "email_sent",
-        "skip",
-    ]
-    surface: Literal["reddit", "twitter", "hackernews", "forum", "other"]
+    event_type: str
+    category: str | None = None
+    surface: str | None = None
+    description: str | None = None
     source_url: str | None = None
-    source_content: str
+    source_content: str | None = None
     source_author: str | None = None
     source_context: str | None = None
     subreddit_or_channel: str | None = None
+    target_audience: str | None = None
     intent_score: AgentIntentScore = Field(default_factory=AgentIntentScore)
-    action_taken: Literal["reply", "dm", "email", "skip"]
+    action_taken: str | None = None
     response_text: str | None = None
     referral_url: str | None = None
     product_id: str | None = None
     tokens_used: int = 0
     compute_cost_usd: float = 0.0
+    expected_impact: str | None = None
+    channels_used: list[str] = Field(default_factory=list)
+    total_actions: int | None = None
     timestamp: str
 
 
@@ -347,28 +378,15 @@ class AgentProductConfig(BaseModel):
     activities: list[str] = Field(default_factory=list)
     url: str | None = None
     referral_base: str
+    key_selling_points: list[str] = Field(default_factory=list)
 
 
-class AgentSurfaceRuleConfig(BaseModel):
-    enabled: bool = False
-    subreddits: list[str] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
-    search_queries: list[str] = Field(default_factory=list)
-
-
-class AgentRulesConfig(BaseModel):
-    intent_threshold: int
-    max_responses_per_surface_per_day: int
-    max_responses_per_subreddit_per_day: int
-    max_responses_per_day: int
-    min_minutes_between_responses_same_surface: int
-    never_respond_to_same_author_within_hours: int
-    never_respond_to_posts_younger_than_minutes: int
-    max_responses_per_thread: int
-    always_disclose: bool = True
-    pause_if_downvote_rate_exceeds: float
-    review_mode: bool
-    auto_post_confidence_threshold: int
+class AgentConstraintsConfig(BaseModel):
+    always_disclose_ai: bool = True
+    always_use_referral_links: bool = True
+    never_spam: bool = True
+    never_disparage_competitors: bool = True
+    max_actions_per_day: int
 
 
 class AgentBudgetConfig(BaseModel):
@@ -389,10 +407,9 @@ class AgentConfigResponse(BaseModel):
     campaign_status: str | None = None
     brand: AgentBrandConfig
     products: list[AgentProductConfig] = Field(default_factory=list)
-    surfaces: dict[str, AgentSurfaceRuleConfig] = Field(default_factory=dict)
-    rules: AgentRulesConfig
     budget: AgentBudgetConfig
     reporting: AgentReportingConfig
+    constraints: AgentConstraintsConfig
 
 
 class OpenClawSkillBundleResponse(BaseModel):
@@ -479,13 +496,19 @@ class ProductDetailResponse(BaseModel):
 
 class ActivityEntry(BaseModel):
     id: str
-    event_type: Literal["match", "click", "conversion", "response"]
-    channel: str = "mcp"
+    event_type: str
+    channel: str = "autonomous_agent"
+    category: str | None = None
+    surface: str | None = None
     title: str
     detail: str
     timestamp: str
     relative_time: str
     product_id: str | None = None
+    product_name: str | None = None
+    compute_cost: float = 0.0
+    expected_impact: str | None = None
+    source_url: str | None = None
 
 
 class BillingCheckoutRequest(BaseModel):

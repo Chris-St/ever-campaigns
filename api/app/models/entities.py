@@ -105,6 +105,7 @@ class Campaign(Base):
     conversions: Mapped[list["Conversion"]] = relationship(back_populates="campaign")
     intent_signals: Mapped[list["IntentSignal"]] = relationship(back_populates="campaign")
     agent_responses: Mapped[list["AgentResponse"]] = relationship(back_populates="campaign")
+    agent_events: Mapped[list["AgentEvent"]] = relationship(back_populates="campaign")
 
 
 class Query(Base):
@@ -245,3 +246,29 @@ class AgentResponse(Base):
     campaign: Mapped[Campaign] = relationship(back_populates="agent_responses")
     product: Mapped[Product | None] = relationship()
     clicks: Mapped[list[Click]] = relationship(back_populates="response")
+
+
+class AgentEvent(Base):
+    __tablename__ = "agent_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_id)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    surface: Mapped[str | None] = mapped_column(String, nullable=True)
+    description: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_author: Mapped[str | None] = mapped_column(String, nullable=True)
+    target_audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), index=True, nullable=True)
+    referral_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    compute_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    expected_impact: Mapped[str | None] = mapped_column(String, nullable=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    campaign: Mapped[Campaign] = relationship(back_populates="agent_events")
+    product: Mapped[Product | None] = relationship()

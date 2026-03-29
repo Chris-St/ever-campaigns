@@ -38,14 +38,13 @@ export default function Home() {
           <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div className="panel flex flex-col justify-between p-8 sm:p-10">
               <div className="space-y-6">
-                <p className="eyebrow">Agent-first customer acquisition</p>
+                <p className="eyebrow">Autonomous commerce</p>
                 <h1 className="max-w-4xl font-display text-5xl tracking-tight text-white sm:text-7xl">
-                  In the agent economy, CAC is just compute.
+                  Give an autonomous agent a budget. Tell it to sell.
                 </h1>
                 <p className="max-w-2xl text-lg leading-9 text-slate-300">
-                  Ever puts your products in front of every AI agent. You only pay when
-                  you sell, and every screen is built around a single operating metric:
-                  Return on Compute.
+                  Ever gives an autonomous agent your catalog, your brand identity, and a compute
+                  budget. It decides the channels and tactics. You watch Return on Compute.
                 </p>
                 <div className="flex flex-wrap gap-3">
                   <Link
@@ -65,9 +64,9 @@ export default function Home() {
 
               <div className="mt-10 grid gap-4 sm:grid-cols-3">
                 {[
-                  { value: "700M+", label: "weekly AI shopping queries" },
-                  { value: "6.6x", label: "higher conversion than search" },
-                  { value: "$0.50", label: "CAC vs $35 on Meta" },
+                  { value: "1", label: "agent with full tactical freedom" },
+                  { value: "24/7", label: "autonomous action and reporting loop" },
+                  { value: "RoC", label: "single operating metric that matters" },
                 ].map((item) => (
                   <div key={item.label} className="rounded-[1.7rem] border border-white/8 bg-white/4 p-5">
                     <p className="font-display text-4xl text-white">{item.value}</p>
@@ -136,17 +135,17 @@ export default function Home() {
               {
                 step: "01",
                 title: "Connect your store",
-                body: "Paste a URL, let Ever crawl the catalog, and review structured products built for agent search.",
+                body: "Paste a URL, let Ever crawl the catalog, and confirm the product truth your agent will use.",
               },
               {
                 step: "02",
-                title: "Set your compute budget",
-                body: "Choose a monthly budget from $100 to $10,000 and let the system auto-optimize across products.",
+                title: "Define budget and brand",
+                body: "Set the compute budget, review the brand voice, and choose how aggressively the agent should operate.",
               },
               {
                 step: "03",
-                title: "Watch agents sell for you",
-                body: "Track matches, clicks, conversions, revenue, and Return on Compute in one live dashboard.",
+                title: "Watch the agent work",
+                body: "Track actions, channel choices, conversions, revenue, and Return on Compute in one live dashboard.",
               },
             ].map((item) => (
               <article key={item.step} className="panel p-6">

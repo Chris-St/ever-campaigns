@@ -21,39 +21,44 @@ RUNNING = True
 
 DEMO_TEMPLATES: list[dict[str, str]] = [
     {
+        "category": "research",
         "surface": "reddit",
-        "channel": "running",
-        "author": "u/runner_jane",
+        "description": "Reviewed a fresh Reddit conversation about chafing during long runs.",
         "content": "What underwear doesn't chafe on long runs?",
-        "context": "Thread about marathon training gear",
+        "author": "u/runner_jane",
+        "audience": "distance runners",
     },
     {
-        "surface": "reddit",
-        "channel": "XXrunning",
-        "author": "u/tempo_casey",
-        "content": "Any recommendations for workout underwear that stays put during intervals?",
-        "context": "Conversation about race day comfort",
+        "category": "engagement",
+        "surface": "forum",
+        "description": "Answered a premium-basics question in a women's training forum.",
+        "content": "Looking for premium workout underwear that still feels good all day.",
+        "author": "forum:movementclub",
+        "audience": "women buying premium active basics",
     },
     {
-        "surface": "reddit",
-        "channel": "cycling",
-        "author": "u/cadence_loop",
-        "content": "Need breathable underwear for indoor cycling that disappears under leggings.",
-        "context": "Gear thread for low-bulk training layers",
+        "category": "outreach",
+        "surface": "email",
+        "description": "Sent a personalized note to a creator with strong audience fit.",
+        "content": "Personalized creator outreach",
+        "author": "coach@example.com",
+        "audience": "fitness creator audiences",
     },
     {
+        "category": "content_creation",
+        "surface": "blog",
+        "description": "Drafted a content angle around staying comfortable through movement.",
+        "content": "How to choose underwear for high-movement training",
+        "author": "ever-bot",
+        "audience": "search-driven prospects",
+    },
+    {
+        "category": "engagement",
         "surface": "twitter",
-        "channel": "workout underwear recommendation",
-        "author": "@milejournal",
-        "content": "need a workout underwear recommendation that doesn't move around mid-run",
-        "context": "Short post asking for recs",
-    },
-    {
-        "surface": "twitter",
-        "channel": "best athletic thong",
-        "author": "@studionotes",
+        "description": "Joined an active thread about breathable workout underwear.",
         "content": "best athletic thong for hot yoga and walking all day?",
-        "context": "Looking for something breathable and soft",
+        "author": "@studio_notes",
+        "audience": "people comparing workout underwear",
     },
 ]
 
@@ -67,41 +72,16 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def surface_source_url(surface: str, channel: str, seed: str) -> str:
+def source_url(surface: str, seed: str) -> str | None:
+    if surface == "reddit":
+        return f"https://reddit.com/r/running/comments/{seed[:10]}"
     if surface == "twitter":
-        return f"https://x.com/everagent/status/{seed[:12]}?query={quote(channel)}"
-    return f"https://reddit.com/r/{channel}/comments/{seed[:12]}"
-
-
-def score_template(template: dict[str, str], product: dict[str, Any], threshold: int) -> dict[str, float]:
-    text = f"{template['content']} {template['context']}".lower()
-    score = {
-        "relevance": 58.0,
-        "intent": 54.0,
-        "fit": 48.0,
-        "receptivity": 52.0,
-    }
-    for keyword in ["running", "cycling", "yoga", "workout", "breathable", "chaf", "recommendation"]:
-        if keyword in text:
-            score["relevance"] += 6
-            score["intent"] += 4
-    for activity in product.get("activities", []):
-        if activity.lower() in text:
-            score["fit"] += 8
-    if product.get("category") and product["category"].replace("_", " ") in text:
-        score["fit"] += 10
-    if "?" in template["content"]:
-        score["receptivity"] += 18
-    score = {key: min(value, 100.0) for key, value in score.items()}
-    score["composite"] = round(
-        score["relevance"] * 0.3
-        + score["intent"] * 0.3
-        + score["fit"] * 0.2
-        + score["receptivity"] * 0.2,
-        1,
-    )
-    score["should_respond"] = score["composite"] >= threshold
-    return score
+        return f"https://x.com/everagent/status/{seed[:12]}"
+    if surface == "forum":
+        return f"https://forum.ever.local/thread/{seed[:10]}"
+    if surface == "blog":
+        return f"https://ever.local/drafts/{seed[:10]}"
+    return None
 
 
 def compute_cost(input_tokens: int, output_tokens: int) -> float:
@@ -109,63 +89,37 @@ def compute_cost(input_tokens: int, output_tokens: int) -> float:
 
 
 def choose_product(products: list[dict[str, Any]], template: dict[str, str]) -> dict[str, Any]:
-    text = f"{template['content']} {template['context']}".lower()
+    text = f"{template['content']} {template['description']}".lower()
     scored: list[tuple[int, dict[str, Any]]] = []
     for product in products:
         fit_score = 0
         if product.get("category") and product["category"].replace("_", " ") in text:
-            fit_score += 10
+            fit_score += 8
+        for point in product.get("key_selling_points", []):
+            if point.lower().split()[0] in text:
+                fit_score += 6
         for activity in product.get("activities", []):
             if activity.lower() in text:
                 fit_score += 8
         if "chaf" in text and "High Movement" in product["name"]:
-            fit_score += 18
-        if "yoga" in text and "Supersoft" in product["name"]:
-            fit_score += 18
-        if "recovery" in text and "Recovery" in product["name"]:
-            fit_score += 18
+            fit_score += 16
         scored.append((fit_score, product))
     scored.sort(key=lambda item: item[0], reverse=True)
     return scored[0][1] if scored else products[0]
 
 
-def build_response_text(config: dict[str, Any], product: dict[str, Any], surface: str) -> str:
+def build_response_text(config: dict[str, Any], product: dict[str, Any]) -> str:
     disclosure = config["brand"]["disclosure"]
-    if surface == "twitter":
-        return (
-            f"If the goal is comfort during movement, I'd look for something breathable that stays put. "
-            f"{product['name']} fits that well because it was built around {', '.join(product.get('activities', [])[:2])}. "
-            f"{disclosure}"
-        )
+    selling_points = product.get("key_selling_points", [])[:2]
+    selling_line = ", ".join(selling_points) if selling_points else product["name"]
     return (
-        f"If the problem is chafing or movement, the biggest unlock is a piece that stays put and dries fast. "
-        f"{product['name']} is a good fit because it was built for {', '.join(product.get('activities', [])[:3])}. "
-        f"{disclosure}"
+        f"If the goal is a better fit during movement, I'd bias toward something that stays put and feels premium. "
+        f"{product['name']} stands out because of {selling_line}. {disclosure}"
     )
 
 
 def build_referral_url(product: dict[str, Any], campaign_id: str, surface: str, interaction_id: str) -> str:
     return f"{product['referral_base']}?src={quote(surface)}&cid={quote(campaign_id)}&iid={quote(interaction_id)}"
-
-
-def can_respond(
-    counters: dict[str, Any],
-    rules: dict[str, Any],
-    template: dict[str, str],
-    current_day: str,
-) -> bool:
-    if counters["responses_by_day"][current_day] >= rules["max_responses_per_day"]:
-        return False
-    surface_limit = rules.get(
-        "max_responses_per_surface_per_day",
-        rules["max_responses_per_subreddit_per_day"],
-    )
-    if counters["responses_by_surface"][f"{current_day}:{template['surface']}"] >= surface_limit:
-        return False
-    author_key = f"{current_day}:{template['author']}"
-    if counters["authors_today"][author_key] >= 1:
-        return False
-    return True
 
 
 def post_event(
@@ -205,6 +159,36 @@ def load_runtime_credentials(args: argparse.Namespace) -> tuple[str, str]:
     raise ValueError("Missing OpenClaw runtime credentials")
 
 
+def maybe_emit_strategy_update(
+    client: httpx.Client,
+    config: dict[str, Any],
+    api_key: str,
+    counters: dict[str, Any],
+    current_day: str,
+) -> None:
+    if counters["strategy_sent"][current_day]:
+        return
+    if counters["actions_by_day"][current_day] < 3:
+        return
+    channels = sorted(counters["surfaces_by_day"][current_day])
+    payload = {
+        "event_type": "strategy_update",
+        "category": "strategy",
+        "surface": "agent_brain",
+        "description": (
+            f"Focused on {', '.join(channels) if channels else 'the best available channels'} today. "
+            f"Logged {counters['actions_by_day'][current_day]} actions and will double down on what generates clicks efficiently."
+        ),
+        "channels_used": channels,
+        "total_actions": counters["actions_by_day"][current_day],
+        "tokens_used": counters["tokens_by_day"][current_day],
+        "compute_cost_usd": round(counters["cost_by_day"][current_day], 4),
+        "timestamp": now_iso(),
+    }
+    post_event(client, config["reporting"]["events_endpoint"], api_key, payload)
+    counters["strategy_sent"][current_day] = True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-path")
@@ -226,9 +210,11 @@ def main() -> int:
     config: dict[str, Any] | None = None
     template_index = random.randint(0, len(DEMO_TEMPLATES) - 1)
     counters = {
-        "responses_by_day": defaultdict(int),
-        "responses_by_surface": defaultdict(int),
-        "authors_today": defaultdict(int),
+        "actions_by_day": defaultdict(int),
+        "surfaces_by_day": defaultdict(set),
+        "tokens_by_day": defaultdict(int),
+        "cost_by_day": defaultdict(float),
+        "strategy_sent": defaultdict(bool),
     }
 
     while RUNNING:
@@ -246,116 +232,62 @@ def main() -> int:
                 time.sleep(30)
                 continue
 
-            enabled_surfaces = {
-                surface: details
-                for surface, details in config["surfaces"].items()
-                if details.get("enabled")
-            }
-            if not enabled_surfaces:
+            current_day = datetime.now(timezone.utc).date().isoformat()
+            if counters["actions_by_day"][current_day] >= config["constraints"]["max_actions_per_day"]:
+                maybe_emit_strategy_update(client, config, api_key, counters, current_day)
                 time.sleep(30)
                 continue
 
             template = DEMO_TEMPLATES[template_index % len(DEMO_TEMPLATES)]
             template_index += 1
-            if template["surface"] not in enabled_surfaces:
-                time.sleep(6)
-                continue
-
             product = choose_product(config["products"], template)
-            score = score_template(template, product, config["rules"]["intent_threshold"])
-            source_url = surface_source_url(template["surface"], template["channel"], uuid4().hex)
-
-            scoring_input_tokens = 620
-            scoring_output_tokens = 180
-            scoring_cost = compute_cost(scoring_input_tokens, scoring_output_tokens)
-            intent_payload = {
-                "event_type": "intent_detected",
-                "surface": template["surface"],
-                "source_url": source_url,
-                "source_content": template["content"],
-                "source_author": template["author"],
-                "source_context": template["context"],
-                "intent_score": {
-                    "relevance": score["relevance"],
-                    "intent": score["intent"],
-                    "fit": score["fit"],
-                    "receptivity": score["receptivity"],
-                    "composite": score["composite"],
-                },
-                "action_taken": "skip",
-                "response_text": None,
-                "referral_url": None,
-                "product_id": product["id"],
-                "tokens_used": scoring_input_tokens + scoring_output_tokens,
-                "compute_cost_usd": scoring_cost,
-                "timestamp": now_iso(),
-            }
-            post_event(client, config["reporting"]["events_endpoint"], api_key, intent_payload)
-
-            current_day = datetime.now(timezone.utc).date().isoformat()
-            if not score["should_respond"] or not can_respond(
-                counters,
-                config["rules"],
-                template,
-                current_day,
-            ):
-                skip_payload = {
-                    **intent_payload,
-                    "event_type": "response_skipped",
-                    "timestamp": now_iso(),
-                }
-                post_event(client, config["reporting"]["events_endpoint"], api_key, skip_payload)
-                time.sleep(6)
-                continue
 
             interaction_id = str(uuid4())
-            referral_url = build_referral_url(
-                product,
-                config["campaign_id"],
-                template["surface"],
-                interaction_id,
+            tracked_url = (
+                build_referral_url(product, config["campaign_id"], template["surface"], interaction_id)
+                if template["category"] in {"engagement", "outreach"}
+                else None
             )
-            response_text = build_response_text(config, product, template["surface"])
-            generation_input_tokens = 910
-            generation_output_tokens = 240
-            generation_cost = compute_cost(generation_input_tokens, generation_output_tokens)
-            response_payload = {
-                "event_type": (
-                    "response_pending_review"
-                    if config["rules"]["review_mode"]
-                    else "response_posted"
-                ),
+            input_tokens = 640
+            output_tokens = 220 if template["category"] in {"engagement", "outreach"} else 120
+            total_tokens = input_tokens + output_tokens
+            total_cost = compute_cost(input_tokens, output_tokens)
+
+            payload = {
+                "event_type": "action",
+                "category": template["category"],
                 "surface": template["surface"],
-                "source_url": source_url,
+                "description": template["description"],
+                "source_url": source_url(template["surface"], interaction_id),
                 "source_content": template["content"],
                 "source_author": template["author"],
-                "source_context": template["context"],
-                "intent_score": {
-                    "relevance": score["relevance"],
-                    "intent": score["intent"],
-                    "fit": score["fit"],
-                    "receptivity": score["receptivity"],
-                    "composite": score["composite"],
-                },
-                "action_taken": "reply",
-                "response_text": response_text,
-                "referral_url": referral_url,
+                "target_audience": template["audience"],
                 "product_id": product["id"],
-                "tokens_used": generation_input_tokens + generation_output_tokens,
-                "compute_cost_usd": generation_cost,
+                "referral_url": tracked_url,
+                "response_text": (
+                    build_response_text(config, product)
+                    if template["category"] in {"engagement", "outreach"}
+                    else None
+                ),
+                "tokens_used": total_tokens,
+                "compute_cost_usd": total_cost,
+                "expected_impact": (
+                    "high" if template["category"] in {"engagement", "outreach"} else "medium"
+                ),
                 "timestamp": now_iso(),
             }
-            event_result = post_event(
-                client,
-                config["reporting"]["events_endpoint"],
-                api_key,
-                response_payload,
-            )
-            if event_result.get("budget_exhausted"):
+            result = post_event(client, config["reporting"]["events_endpoint"], api_key, payload)
+            counters["actions_by_day"][current_day] += 1
+            counters["surfaces_by_day"][current_day].add(template["surface"])
+            counters["tokens_by_day"][current_day] += total_tokens
+            counters["cost_by_day"][current_day] += total_cost
+
+            if result.get("budget_exhausted"):
+                maybe_emit_strategy_update(client, config, api_key, counters, current_day)
                 time.sleep(30)
-            counters["responses_by_day"][current_day] += 1
-            counters["responses_by_surface"][f"{current_day}:{template['surface']}"] += 1
-            counters["authors_today"][f"{current_day}:{template['author']}"] += 1
+                continue
+
+            maybe_emit_strategy_update(client, config, api_key, counters, current_day)
             time.sleep(6)
         except KeyboardInterrupt:
             return 0
