@@ -14,3 +14,5 @@ web/.vercel/
 api/.venv/
 api/.pytest_cache/
 api/__pycache__/
+api/.runtime/
+.openclaw/runtime/

@@ -114,6 +114,7 @@ class AgentEndpoints(BaseModel):
     mcp: AgentChannelStatus
     acp: AgentChannelStatus
     ucp: AgentChannelStatus
+    openclaw: dict[str, Any] = Field(default_factory=dict)
 
 
 class BrandVoiceProfile(BaseModel):
@@ -138,8 +139,11 @@ class ListenerSafeguards(BaseModel):
     max_thread_replies: int = 2
     minimum_minutes_between_surface_responses: int = 5
     minimum_post_age_minutes: int = 10
+    never_respond_to_same_author_within_hours: int = 24
     one_response_per_author_per_day: bool = True
     always_disclose_ai: bool = True
+    pause_if_downvote_rate_exceeds: float = 0.2
+    auto_post_confidence_threshold: int = 70
 
 
 class ListenerSurfaceConfig(BaseModel):
@@ -162,13 +166,19 @@ class ListenerConfig(BaseModel):
 
 class ListenerStatus(BaseModel):
     campaign_id: str
-    status: Literal["running", "stopped"]
-    surfaces_active: int
+    status: Literal["running", "stopped", "paused", "budget_exhausted"]
+    last_active: str | None = None
+    last_polled_at: str | None = None
+    signals_today: int
+    responses_today: int
+    surfaces_active: list[str] = Field(default_factory=list)
+    surfaces_active_count: int = 0
+    budget_remaining: float
+    uptime_hours: float
     signals_detected_today: int
     responses_pending_review: int
     compute_spent_today: float
     approved_response_count: int
-    last_polled_at: str | None = None
     brand_voice_profile: BrandVoiceProfile
     config: ListenerConfig
 
@@ -204,6 +214,10 @@ class ReviewResponseEditRequest(BaseModel):
 
 class ListenerTopSurface(BaseModel):
     surface: str
+    subreddit: str | None = None
+    query: str | None = None
+    subreddit_or_channel: str | None = None
+    responses: int = 0
     signals_detected: int
     responses_sent: int
     clicks: int
@@ -215,8 +229,10 @@ class ListenerTopSurface(BaseModel):
 
 class ListenerTopProduct(BaseModel):
     product_id: str | None = None
+    name: str | None = None
     product_name: str | None = None
     surface: str | None = None
+    responses: int = 0
     responses_sent: int
     clicks: int
     conversions: int
@@ -259,6 +275,117 @@ class ListenerAnalytics(BaseModel):
     top_subreddits: list[ListenerCountBreakdown] = Field(default_factory=list)
     intent_score_distribution: list[ListenerCountBreakdown] = Field(default_factory=list)
     daily: list[ListenerAnalyticsPoint] = Field(default_factory=list)
+    daily_series: list[ListenerAnalyticsPoint] = Field(default_factory=list)
+
+
+class CampaignAgentKeyResponse(BaseModel):
+    api_key: str
+    api_key_preview: str
+
+
+class AgentIntentScore(BaseModel):
+    relevance: float = 0
+    intent: float = 0
+    fit: float = 0
+    receptivity: float = 0
+    composite: float = 0
+
+
+class AgentEventRequest(BaseModel):
+    event_type: Literal[
+        "intent_detected",
+        "response_posted",
+        "response_skipped",
+        "response_pending_review",
+        "dm_sent",
+        "email_sent",
+        "skip",
+    ]
+    surface: Literal["reddit", "twitter", "hackernews", "forum", "other"]
+    source_url: str | None = None
+    source_content: str
+    source_author: str | None = None
+    source_context: str | None = None
+    intent_score: AgentIntentScore = Field(default_factory=AgentIntentScore)
+    action_taken: Literal["reply", "dm", "email", "skip"]
+    response_text: str | None = None
+    referral_url: str | None = None
+    product_id: str | None = None
+    tokens_used: int = 0
+    compute_cost_usd: float = 0.0
+    timestamp: str
+
+
+class AgentEventResponse(BaseModel):
+    event_id: str
+    status: str
+    budget_remaining: float
+    budget_exhausted: bool
+
+
+class AgentBrandConfig(BaseModel):
+    name: str
+    domain: str
+    voice: str
+    dos: list[str] = Field(default_factory=list)
+    donts: list[str] = Field(default_factory=list)
+    disclosure: str
+
+
+class AgentProductConfig(BaseModel):
+    id: str
+    name: str
+    price: float
+    currency: str
+    description: str | None = None
+    category: str | None = None
+    material: str | None = None
+    activities: list[str] = Field(default_factory=list)
+    url: str | None = None
+    referral_base: str
+
+
+class AgentSurfaceRuleConfig(BaseModel):
+    enabled: bool = False
+    subreddits: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)
+
+
+class AgentRulesConfig(BaseModel):
+    intent_threshold: int
+    max_responses_per_subreddit_per_day: int
+    max_responses_per_day: int
+    min_minutes_between_responses_same_surface: int
+    never_respond_to_same_author_within_hours: int
+    never_respond_to_posts_younger_than_minutes: int
+    max_responses_per_thread: int
+    pause_if_downvote_rate_exceeds: float
+    review_mode: bool
+    auto_post_confidence_threshold: int
+
+
+class AgentBudgetConfig(BaseModel):
+    monthly: float
+    spent: float
+    remaining: float
+    currency: str
+
+
+class AgentReportingConfig(BaseModel):
+    events_endpoint: str
+    api_key: str
+
+
+class AgentConfigResponse(BaseModel):
+    campaign_id: str
+    campaign_status: str | None = None
+    brand: AgentBrandConfig
+    products: list[AgentProductConfig] = Field(default_factory=list)
+    surfaces: dict[str, AgentSurfaceRuleConfig] = Field(default_factory=dict)
+    rules: AgentRulesConfig
+    budget: AgentBudgetConfig
+    reporting: AgentReportingConfig
 
 
 class CampaignOverview(BaseModel):
@@ -331,7 +458,7 @@ class ProductDetailResponse(BaseModel):
 
 class ActivityEntry(BaseModel):
     id: str
-    event_type: Literal["match", "click", "conversion"]
+    event_type: Literal["match", "click", "conversion", "response"]
     channel: str = "mcp"
     title: str
     detail: str

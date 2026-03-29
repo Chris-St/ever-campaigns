@@ -9,6 +9,7 @@ from app.models.entities import Campaign, User
 from app.schemas.contracts import (
     ActivityEntry,
     AgentEndpoints,
+    CampaignAgentKeyResponse,
     CampaignCreateRequest,
     CampaignOverview,
     CampaignUpdateRequest,
@@ -21,6 +22,7 @@ from app.services.analytics import (
     build_product_rows,
     compute_campaign_overview,
 )
+from app.services.listener import ensure_campaign_api_key
 
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
@@ -33,6 +35,7 @@ def create_campaign(
     db: Session = Depends(get_db),
 ) -> CampaignOverview:
     merchant = require_merchant_access(db, payload.merchant_id, current_user)
+    plaintext_api_key: str | None = None
     campaign = db.scalar(
         select(Campaign).where(
             Campaign.user_id == current_user.id,
@@ -47,12 +50,14 @@ def create_campaign(
             auto_optimize=payload.auto_optimize,
             status="pending_payment",
         )
+        plaintext_api_key = ensure_campaign_api_key(campaign)
         db.add(campaign)
     else:
         campaign.budget_monthly = payload.budget_monthly
         campaign.auto_optimize = payload.auto_optimize
         if campaign.status == "paused":
             campaign.status = "pending_payment"
+        plaintext_api_key = ensure_campaign_api_key(campaign)
 
     db.commit()
     campaign = db.scalar(
@@ -60,7 +65,9 @@ def create_campaign(
         .where(Campaign.id == campaign.id)
         .options(joinedload(Campaign.merchant))
     )
-    return CampaignOverview.model_validate(compute_campaign_overview(db, campaign))
+    return CampaignOverview.model_validate(
+        compute_campaign_overview(db, campaign, agent_api_key_plaintext=plaintext_api_key)
+    )
 
 
 @router.get("/{campaign_id}", response_model=CampaignOverview)
@@ -92,6 +99,21 @@ def get_campaign_endpoints(
     )
     overview = compute_campaign_overview(db, campaign)
     return AgentEndpoints.model_validate(overview["agent_endpoints"])
+
+
+@router.post("/{campaign_id}/agent-key/regenerate", response_model=CampaignAgentKeyResponse)
+def regenerate_campaign_agent_key(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CampaignAgentKeyResponse:
+    campaign = require_campaign_access(db, campaign_id, current_user)
+    plaintext_api_key = ensure_campaign_api_key(campaign, regenerate=True)
+    db.commit()
+    return CampaignAgentKeyResponse(
+        api_key=plaintext_api_key,
+        api_key_preview=f"ek_live_****{plaintext_api_key[-4:]}",
+    )
 
 
 @router.get("/{campaign_id}/metrics", response_model=list[TimeSeriesPoint])

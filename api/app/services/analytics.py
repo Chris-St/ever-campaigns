@@ -28,7 +28,11 @@ def relative_time(value: datetime) -> str:
     return f"{minutes}m ago"
 
 
-def compute_campaign_overview(db: Session, campaign: Campaign) -> dict:
+def compute_campaign_overview(
+    db: Session,
+    campaign: Campaign,
+    agent_api_key_plaintext: str | None = None,
+) -> dict:
     matches = db.scalars(
         select(Match).where(Match.campaign_id == campaign.id).options(joinedload(Match.product))
     ).all()
@@ -103,7 +107,7 @@ def compute_campaign_overview(db: Session, campaign: Campaign) -> dict:
             "payment_method": "Demo Visa ending in 4242",
             "invoices": build_invoices(campaign),
         },
-        "agent_endpoints": build_agent_endpoints(campaign),
+        "agent_endpoints": build_agent_endpoints(campaign, api_key_plaintext=agent_api_key_plaintext),
     }
 
 
@@ -257,6 +261,16 @@ def build_activity_feed(
         .where(Match.campaign_id == campaign_id)
         .options(joinedload(Match.product), joinedload(Match.query))
     ).all()
+    signals = db.scalars(
+        select(IntentSignal)
+        .where(IntentSignal.campaign_id == campaign_id)
+        .options(joinedload(IntentSignal.product))
+    ).all()
+    responses = db.scalars(
+        select(AgentResponse)
+        .where(AgentResponse.campaign_id == campaign_id)
+        .options(joinedload(AgentResponse.product), joinedload(AgentResponse.signal))
+    ).all()
     clicks = db.scalars(
         select(Click)
         .where(Click.campaign_id == campaign_id)
@@ -286,6 +300,48 @@ def build_activity_feed(
                     "timestamp": match.created_at.isoformat(),
                     "relative_time": relative_time(match.created_at),
                     "product_id": match.product_id,
+                }
+            )
+        for signal in signals:
+            channel_label = signal.subreddit_or_channel or signal.surface
+            detail_context = signal.context_text or signal.content_text
+            events.append(
+                {
+                    "id": signal.id,
+                    "event_type": "match",
+                    "channel": "intent_listener",
+                    "title": f"Intent detected on {signal.surface}",
+                    "detail": f"{channel_label}: {detail_context}",
+                    "timestamp": signal.created_at.isoformat(),
+                    "relative_time": relative_time(signal.created_at),
+                    "product_id": signal.product_id,
+                }
+            )
+
+    if event_type in ("all", "response"):
+        for response in responses:
+            action_label = (
+                "Reply posted"
+                if response.posted
+                else "Response queued"
+                if response.review_status == "pending"
+                else "Response skipped"
+                if response.review_status == "rejected"
+                else "Response created"
+            )
+            channel_label = response.signal.subreddit_or_channel if response.signal else response.surface
+            events.append(
+                {
+                    "id": response.id,
+                    "event_type": "response",
+                    "channel": "intent_listener",
+                    "title": f"{action_label} on {response.surface}",
+                    "detail": (
+                        f"{channel_label}: {response.response_text or 'No response text recorded.'}"
+                    ),
+                    "timestamp": response.created_at.isoformat(),
+                    "relative_time": relative_time(response.created_at),
+                    "product_id": response.product_id,
                 }
             )
 

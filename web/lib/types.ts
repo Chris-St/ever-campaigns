@@ -78,6 +78,21 @@ export interface AgentEndpoints {
   mcp: AgentChannelStatus;
   acp: AgentChannelStatus;
   ucp: AgentChannelStatus;
+  openclaw: OpenClawEndpoint;
+}
+
+export interface OpenClawEndpoint {
+  status: string;
+  label: string;
+  badge: string;
+  description: string;
+  config_url: string;
+  events_url: string;
+  api_key?: string | null;
+  api_key_preview?: string | null;
+  skill_path?: string | null;
+  config_path?: string | null;
+  launch_command?: string | null;
 }
 
 export interface BrandVoiceProfile {
@@ -102,8 +117,11 @@ export interface ListenerSafeguards {
   max_thread_replies: number;
   minimum_minutes_between_surface_responses: number;
   minimum_post_age_minutes: number;
+  never_respond_to_same_author_within_hours: number;
   one_response_per_author_per_day: boolean;
   always_disclose_ai: boolean;
+  pause_if_downvote_rate_exceeds: number;
+  auto_post_confidence_threshold: number;
 }
 
 export interface ListenerSurfaceConfig {
@@ -126,13 +144,19 @@ export interface ListenerConfig {
 
 export interface ListenerStatus {
   campaign_id: string;
-  status: "running" | "stopped";
-  surfaces_active: number;
+  status: "running" | "stopped" | "paused" | "budget_exhausted";
+  last_active?: string | null;
+  last_polled_at?: string | null;
+  signals_today: number;
+  responses_today: number;
+  surfaces_active: string[];
+  surfaces_active_count: number;
+  budget_remaining: number;
+  uptime_hours: number;
   signals_detected_today: number;
   responses_pending_review: number;
   compute_spent_today: number;
   approved_response_count: number;
-  last_polled_at?: string | null;
   brand_voice_profile: BrandVoiceProfile;
   config: ListenerConfig;
 }
@@ -159,6 +183,10 @@ export interface ReviewQueueItem {
 
 export interface ListenerTopSurface {
   surface: string;
+  subreddit?: string | null;
+  query?: string | null;
+  subreddit_or_channel?: string | null;
+  responses: number;
   signals_detected: number;
   responses_sent: number;
   clicks: number;
@@ -170,8 +198,10 @@ export interface ListenerTopSurface {
 
 export interface ListenerTopProduct {
   product_id?: string | null;
+  name?: string | null;
   product_name?: string | null;
   surface?: string | null;
+  responses: number;
   responses_sent: number;
   clicks: number;
   conversions: number;
@@ -214,6 +244,7 @@ export interface ListenerAnalytics {
   top_subreddits: ListenerCountBreakdown[];
   intent_score_distribution: ListenerCountBreakdown[];
   daily: ListenerAnalyticsPoint[];
+  daily_series: ListenerAnalyticsPoint[];
 }
 
 export interface CampaignOverview {
@@ -262,13 +293,18 @@ export interface ProductPerformanceRow {
 
 export interface ActivityEntry {
   id: string;
-  event_type: "match" | "click" | "conversion";
+  event_type: "match" | "click" | "conversion" | "response";
   channel: string;
   title: string;
   detail: string;
   timestamp: string;
   relative_time: string;
   product_id?: string | null;
+}
+
+export interface CampaignAgentKeyResponse {
+  api_key: string;
+  api_key_preview: string;
 }
 
 export interface QueryInsight {

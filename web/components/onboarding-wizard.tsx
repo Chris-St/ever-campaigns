@@ -204,8 +204,21 @@ export function OnboardingWizard() {
           token,
         },
       );
+      const retainedOpenclawKey = campaign.agent_endpoints.openclaw.api_key ?? null;
       setCheckoutResponse(response);
-      setCampaign(liveCampaign);
+      setCampaign({
+        ...liveCampaign,
+        agent_endpoints: {
+          ...liveCampaign.agent_endpoints,
+          openclaw: {
+            ...liveCampaign.agent_endpoints.openclaw,
+            api_key: retainedOpenclawKey,
+            api_key_preview:
+              liveCampaign.agent_endpoints.openclaw.api_key_preview ??
+              campaign.agent_endpoints.openclaw.api_key_preview,
+          },
+        },
+      });
       setListenerStatus(nextListenerStatus);
       setListenerConfig(nextListenerStatus.config);
       setBrandVoice(nextListenerStatus.brand_voice_profile);
@@ -885,6 +898,86 @@ export function OnboardingWizard() {
                     </div>
 
                     <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5 lg:col-span-2">
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                          <div>
+                            <p className="eyebrow">OpenClaw runtime</p>
+                            <h3 className="font-display text-2xl text-white">
+                              Listener engine access
+                            </h3>
+                            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">
+                              Use this config endpoint, events endpoint, and campaign API key to run
+                              the local OpenClaw-compatible listener and report intent, replies, and
+                              compute back into Ever.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-3">
+                            <button
+                              onClick={() =>
+                                handleCopy(
+                                  "openclaw-key",
+                                  campaign.agent_endpoints.openclaw.api_key,
+                                )
+                              }
+                              className="rounded-full border border-white/10 bg-white/7 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/12"
+                            >
+                              {copiedField === "openclaw-key" ? "Copied" : "Copy API key"}
+                            </button>
+                            <button
+                              onClick={() =>
+                                handleCopy(
+                                  "openclaw-command",
+                                  campaign.agent_endpoints.openclaw.launch_command,
+                                )
+                              }
+                              className="rounded-full border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm font-semibold text-blue-100 transition hover:bg-blue-500/15"
+                            >
+                              {copiedField === "openclaw-command" ? "Copied" : "Copy launch command"}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                          <div className="rounded-[1.5rem] border border-white/8 bg-slate-950/45 p-5">
+                            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                              Campaign API key
+                            </p>
+                            <p className="mt-3 break-all font-mono text-sm text-white">
+                              {campaign.agent_endpoints.openclaw.api_key ??
+                                campaign.agent_endpoints.openclaw.api_key_preview ??
+                                "Generate from the dashboard if you need a fresh key."}
+                            </p>
+                          </div>
+                          <div className="rounded-[1.5rem] border border-white/8 bg-slate-950/45 p-5">
+                            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                              Local launch command
+                            </p>
+                            <p className="mt-3 break-all font-mono text-sm leading-7 text-slate-200">
+                              {campaign.agent_endpoints.openclaw.launch_command}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                          <div className="rounded-[1.5rem] border border-white/8 bg-slate-950/45 p-5">
+                            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                              Config endpoint
+                            </p>
+                            <p className="mt-3 break-all text-sm leading-7 text-slate-200">
+                              {campaign.agent_endpoints.openclaw.config_url}
+                            </p>
+                          </div>
+                          <div className="rounded-[1.5rem] border border-white/8 bg-slate-950/45 p-5">
+                            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                              Events endpoint
+                            </p>
+                            <p className="mt-3 break-all text-sm leading-7 text-slate-200">
+                              {campaign.agent_endpoints.openclaw.events_url}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="rounded-[1.8rem] border border-white/8 bg-white/4 p-5">
                         <div className="flex items-center justify-between">
                           <div>
@@ -1334,7 +1427,10 @@ export function OnboardingWizard() {
                           Surfaces active
                         </p>
                         <p className="mt-2 font-display text-3xl text-white">
-                          {listenerStatus.surfaces_active}
+                          {listenerStatus.surfaces_active_count}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-400">
+                          {listenerStatus.surfaces_active.join(", ")}
                         </p>
                       </div>
                       <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">

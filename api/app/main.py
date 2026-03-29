@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.agent_runtime import router as agent_runtime_router
 from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.campaigns import router as campaigns_router
@@ -58,3 +59,4 @@ app.include_router(tracking_router)
 app.include_router(feeds_router)
 app.include_router(mcp_router)
 app.include_router(listener_router)
+app.include_router(agent_runtime_router)

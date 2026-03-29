@@ -20,6 +20,7 @@ import {
 import { fallbackImageSrc } from "@/lib/image";
 import type {
   ActivityEntry,
+  CampaignAgentKeyResponse,
   CampaignOverview,
   ListenerAnalytics,
   ListenerStatus,
@@ -42,7 +43,7 @@ export function DashboardClient() {
   const { token, user, loading } = useAuth();
   const [campaignId, setCampaignIdState] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("30d");
-  const [eventFilter, setEventFilter] = useState<"all" | "match" | "click" | "conversion">(
+  const [eventFilter, setEventFilter] = useState<"all" | "match" | "click" | "conversion" | "response">(
     "all",
   );
   const [sortKey, setSortKey] = useState<SortKey>("revenue");
@@ -55,6 +56,7 @@ export function DashboardClient() {
   const [listenerAnalytics, setListenerAnalytics] = useState<ListenerAnalytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
   const [endpointsOpen, setEndpointsOpen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -235,9 +237,16 @@ export function DashboardClient() {
     }
     setIsRefreshing(true);
     try {
-      const [nextListenerStatus, nextListenerAnalytics] = await Promise.all([
-        apiRequest<ListenerStatus>(`/campaigns/${campaignId}/listener/start`, {
+      const nextListenerStatus = await apiRequest<ListenerStatus>(
+        `/campaigns/${campaignId}/listener/start`,
+        {
           method: "POST",
+          token,
+        },
+      );
+      const [nextOverview, nextListenerAnalytics] = await Promise.all([
+        apiRequest<CampaignOverview>(`/campaigns/${campaignId}`, {
+          method: "GET",
           token,
         }),
         apiRequest<ListenerAnalytics>(`/campaigns/${campaignId}/listener/analytics?period=${period}`, {
@@ -245,6 +254,7 @@ export function DashboardClient() {
           token,
         }),
       ]);
+      setOverview(nextOverview);
       setListenerStatus(nextListenerStatus);
       setListenerAnalytics(nextListenerAnalytics);
       setError(null);
@@ -259,7 +269,50 @@ export function DashboardClient() {
     }
   }
 
+  async function handleRegenerateAgentKey() {
+    if (!token || !campaignId) {
+      return;
+    }
+    setIsRegeneratingKey(true);
+    try {
+      const response = await apiRequest<CampaignAgentKeyResponse>(
+        `/campaigns/${campaignId}/agent-key/regenerate`,
+        {
+          method: "POST",
+          token,
+        },
+      );
+      setOverview((current) =>
+        current
+          ? {
+              ...current,
+              agent_endpoints: {
+                ...current.agent_endpoints,
+                openclaw: {
+                  ...current.agent_endpoints.openclaw,
+                  api_key: response.api_key,
+                  api_key_preview: response.api_key_preview,
+                },
+              },
+            }
+          : current,
+      );
+      setError(null);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to regenerate the agent API key.",
+      );
+    } finally {
+      setIsRegeneratingKey(false);
+    }
+  }
+
   const endpoints = overview.agent_endpoints;
+  const openclaw = endpoints.openclaw;
+  const openclawKeyValue = openclaw.api_key ?? null;
+  const openclawSurfaces = listenerStatus?.surfaces_active.join(", ") ?? "";
 
   return (
     <div className="min-h-screen">
@@ -355,7 +408,7 @@ export function DashboardClient() {
                 label="Intents Detected"
                 value={listenerAnalytics.signals_detected}
                 accentClass="bg-blue-400/10 text-blue-100"
-                caption={`${formatNumber(listenerStatus.signals_detected_today)} found today across ${formatNumber(listenerStatus.surfaces_active)} active surfaces`}
+                caption={`${formatNumber(listenerStatus.signals_detected_today)} found today across ${formatNumber(listenerStatus.surfaces_active_count)} active surfaces${openclawSurfaces ? ` (${openclawSurfaces})` : ""}`}
                 sparkline={listenerSignalSparkline}
               />
               <DashboardMetricCard
@@ -401,15 +454,17 @@ export function DashboardClient() {
                   {listenerAnalytics.top_surfaces.length ? (
                     listenerAnalytics.top_surfaces.map((surface) => (
                       <div
-                        key={surface.surface}
+                        key={`${surface.surface}-${surface.subreddit_or_channel ?? "surface"}`}
                         className="rounded-[1.4rem] border border-white/8 bg-slate-950/45 p-4"
                       >
                         <div className="flex items-center justify-between gap-4">
                           <div>
-                            <p className="font-medium text-white">{surface.surface}</p>
+                            <p className="font-medium text-white">
+                              {surface.subreddit_or_channel ?? surface.surface}
+                            </p>
                             <p className="mt-1 text-sm text-slate-400">
                               {formatNumber(surface.signals_detected)} signals,{" "}
-                              {formatNumber(surface.responses_sent)} responses,{" "}
+                              {formatNumber(surface.responses)} responses,{" "}
                               {formatNumber(surface.clicks)} clicks
                             </p>
                           </div>
@@ -478,16 +533,16 @@ export function DashboardClient() {
                   <div className="mt-5 space-y-3">
                     {listenerAnalytics.top_products.slice(0, 3).map((product) => (
                       <div
-                        key={product.product_id ?? product.product_name}
+                        key={product.product_id ?? product.name ?? product.product_name}
                         className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 px-4 py-4"
                       >
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <p className="text-sm font-medium text-white">
-                              {product.product_name ?? "Product"}
+                              {product.name ?? product.product_name ?? "Product"}
                             </p>
                             <p className="mt-1 text-sm text-slate-400">
-                              {formatNumber(product.responses_sent)} responses,{" "}
+                              {formatNumber(product.responses)} responses,{" "}
                               {formatNumber(product.clicks)} clicks,{" "}
                               {formatNumber(product.conversions)} conversions
                             </p>
@@ -609,7 +664,7 @@ export function DashboardClient() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  {(["all", "match", "click", "conversion"] as const).map((value) => (
+                  {(["all", "match", "response", "click", "conversion"] as const).map((value) => (
                     <button
                       key={value}
                       onClick={() => setEventFilter(value)}
@@ -657,7 +712,7 @@ export function DashboardClient() {
                 <div className="text-left">
                   <p className="eyebrow">Agent endpoints</p>
                   <h2 className="font-display text-2xl text-white">
-                    MCP, ACP, and UCP surfaces
+                    MCP, OpenClaw, ACP, and UCP surfaces
                   </h2>
                 </div>
                 <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.22em] text-slate-300">
@@ -693,6 +748,110 @@ export function DashboardClient() {
                       <p className="text-sm leading-7 text-slate-400">
                         Share this URL with any AI agent developer to make your products discoverable.
                       </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
+                    <div className="flex flex-col gap-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`h-2.5 w-2.5 rounded-full ${
+                              openclaw.status === "running"
+                                ? "bg-emerald-300"
+                                : openclaw.status === "paused"
+                                  ? "bg-amber-300"
+                                  : "bg-slate-500"
+                            }`}
+                          />
+                          <div>
+                            <p className="text-sm font-medium text-white">OpenClaw listener runtime</p>
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                              {openclaw.badge}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => void handleCopy("dashboard-openclaw-config", openclaw.config_url)}
+                            className="rounded-full border border-white/10 bg-white/7 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white transition hover:bg-white/12"
+                          >
+                            {copiedField === "dashboard-openclaw-config" ? "Copied" : "Copy config URL"}
+                          </button>
+                          <button
+                            onClick={() => void handleCopy("dashboard-openclaw-events", openclaw.events_url)}
+                            className="rounded-full border border-white/10 bg-white/7 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white transition hover:bg-white/12"
+                          >
+                            {copiedField === "dashboard-openclaw-events" ? "Copied" : "Copy events URL"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="text-sm leading-7 text-slate-400">
+                        {openclaw.description}
+                      </p>
+
+                      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+                        <div className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                              Campaign API key
+                            </p>
+                            <div className="flex gap-2">
+                              {openclawKeyValue ? (
+                                <button
+                                  onClick={() => void handleCopy("dashboard-openclaw-key", openclawKeyValue)}
+                                  className="rounded-full border border-white/10 bg-white/7 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.22em] text-white transition hover:bg-white/12"
+                                >
+                                  {copiedField === "dashboard-openclaw-key" ? "Copied" : "Copy key"}
+                                </button>
+                              ) : null}
+                              <button
+                                onClick={() => void handleRegenerateAgentKey()}
+                                disabled={isRegeneratingKey}
+                                className="rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.22em] text-blue-100 transition hover:bg-blue-500/15 disabled:cursor-not-allowed disabled:opacity-70"
+                              >
+                                {isRegeneratingKey ? "Generating" : openclawKeyValue ? "Regenerate" : "Reveal / regenerate"}
+                              </button>
+                            </div>
+                          </div>
+                          <p className="mt-3 break-all font-mono text-sm text-white">
+                            {openclawKeyValue ?? openclaw.api_key_preview ?? "Generate a campaign key to start the listener."}
+                          </p>
+                          <p className="mt-2 text-sm leading-7 text-slate-400">
+                            The full key is shown only after creation or regeneration. Store it in the generated OpenClaw runtime config.
+                          </p>
+                        </div>
+
+                        <div className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 p-4">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                            Runtime files
+                          </p>
+                          <p className="mt-3 break-all text-sm leading-7 text-slate-200">
+                            Skill: {openclaw.skill_path ?? "Pending generation"}
+                          </p>
+                          <p className="mt-2 break-all text-sm leading-7 text-slate-200">
+                            Config: {openclaw.config_path ?? "Pending generation"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[1.3rem] border border-white/8 bg-slate-950/45 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                            Local launch command
+                          </p>
+                          <button
+                            onClick={() => void handleCopy("dashboard-openclaw-command", openclaw.launch_command)}
+                            className="rounded-full border border-white/10 bg-white/7 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.22em] text-white transition hover:bg-white/12"
+                          >
+                            {copiedField === "dashboard-openclaw-command" ? "Copied" : "Copy command"}
+                          </button>
+                        </div>
+                        <p className="mt-3 break-all font-mono text-sm leading-7 text-slate-200">
+                          {openclaw.launch_command}
+                        </p>
+                      </div>
                     </div>
                   </div>
 

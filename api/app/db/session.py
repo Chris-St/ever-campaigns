@@ -34,6 +34,9 @@ def ensure_runtime_schema() -> None:
 
     alter_statements = {
         ("merchants", "merchant_slug"): "ALTER TABLE merchants ADD COLUMN merchant_slug VARCHAR",
+        ("campaigns", "listener_api_key"): "ALTER TABLE campaigns ADD COLUMN listener_api_key VARCHAR",
+        ("campaigns", "listener_api_key_hash"): "ALTER TABLE campaigns ADD COLUMN listener_api_key_hash VARCHAR",
+        ("campaigns", "listener_api_key_last_four"): "ALTER TABLE campaigns ADD COLUMN listener_api_key_last_four VARCHAR",
         ("campaigns", "brand_voice_profile"): "ALTER TABLE campaigns ADD COLUMN brand_voice_profile JSON",
         ("campaigns", "listener_config"): "ALTER TABLE campaigns ADD COLUMN listener_config JSON",
         ("campaigns", "listener_status"): "ALTER TABLE campaigns ADD COLUMN listener_status VARCHAR DEFAULT 'stopped'",

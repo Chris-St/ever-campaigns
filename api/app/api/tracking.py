@@ -82,11 +82,19 @@ def shopify_order_webhook(
             .order_by(Click.created_at.desc())
         )
     if click is None:
-        click = db.scalar(
+        candidate_clicks = db.scalars(
             select(Click)
             .where(Click.product_id == payload.product_id, Click.campaign_id == payload.campaign_id)
             .order_by(Click.created_at.desc())
-        )
+        ).all()
+        if candidate_clicks:
+            click = max(
+                candidate_clicks,
+                key=lambda candidate: (
+                    candidate.source == "intent_listener",
+                    candidate.created_at,
+                ),
+            )
 
     conversion = Conversion(
         click_id=click.id if click else None,

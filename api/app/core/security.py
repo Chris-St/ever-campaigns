@@ -41,3 +41,21 @@ def create_access_token(subject: str) -> str:
 
 def decode_access_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+
+
+def generate_campaign_api_key() -> str:
+    return f"ek_live_{os.urandom(16).hex()}"
+
+
+def hash_api_key(api_key: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(settings.secret_key.encode("utf-8"))
+    digest.update(b":")
+    digest.update(api_key.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def verify_api_key(api_key: str, stored_hash: str | None) -> bool:
+    if not api_key or not stored_hash:
+        return False
+    return hmac.compare_digest(hash_api_key(api_key), stored_hash)
