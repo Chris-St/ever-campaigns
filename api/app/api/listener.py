@@ -4,9 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.deps import get_current_user, get_db, require_campaign_access
+from app.api.deps import get_campaign_by_api_key, get_current_user, get_db, require_campaign_access
 from app.models.entities import Campaign, Merchant, User
 from app.schemas.contracts import (
+    AgentConfigResponse,
+    AgentEventRequest,
+    AgentEventResponse,
     ListenerAnalytics,
     ListenerConfigUpdateRequest,
     ListenerStatus,
@@ -15,9 +18,11 @@ from app.schemas.contracts import (
 )
 from app.services.listener import (
     approve_response,
+    build_agent_config,
     build_listener_analytics,
     build_listener_status,
     edit_response,
+    record_agent_event,
     reject_response,
     review_queue,
     start_listener,
@@ -27,6 +32,7 @@ from app.services.listener import (
 
 
 router = APIRouter(prefix="/campaigns", tags=["listener"])
+agent_router = APIRouter(prefix="/api/campaigns", tags=["listener"])
 
 
 def load_listener_campaign(db: Session, campaign_id: str) -> Campaign | None:
@@ -167,3 +173,23 @@ def get_campaign_listener_analytics(
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return ListenerAnalytics.model_validate(build_listener_analytics(db, campaign, period=period))
+
+
+@agent_router.get("/{campaign_id}/agent-config", response_model=AgentConfigResponse)
+def get_campaign_agent_config(
+    campaign: Campaign = Depends(get_campaign_by_api_key),
+    db: Session = Depends(get_db),
+) -> AgentConfigResponse:
+    payload = build_agent_config(campaign)
+    db.commit()
+    return AgentConfigResponse.model_validate(payload)
+
+
+@agent_router.post("/{campaign_id}/events", response_model=AgentEventResponse)
+def post_campaign_agent_event(
+    payload: AgentEventRequest,
+    campaign: Campaign = Depends(get_campaign_by_api_key),
+    db: Session = Depends(get_db),
+) -> AgentEventResponse:
+    result = record_agent_event(db, campaign, payload.model_dump())
+    return AgentEventResponse.model_validate(result)

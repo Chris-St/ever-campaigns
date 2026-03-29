@@ -8,20 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import (
-    get_campaign_by_api_key,
     get_current_user,
     get_db,
     require_campaign_access,
 )
 from app.models.entities import Campaign, Merchant, User
 from app.schemas.contracts import (
-    AgentConfigResponse,
-    AgentEventRequest,
-    AgentEventResponse,
     OpenClawConfigResponse,
     OpenClawSkillBundleResponse,
 )
-from app.services.listener import build_agent_config, ensure_campaign_api_key, record_agent_event
+from app.services.listener import ensure_campaign_api_key
 from app.services.openclaw_runtime import build_openclaw_skill_bundle
 
 
@@ -37,26 +33,6 @@ def load_campaign_with_products(db: Session, campaign_id: str) -> Campaign:
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
-
-
-@router.get("/{campaign_id}/agent-config", response_model=AgentConfigResponse)
-def get_campaign_agent_config(
-    campaign: Campaign = Depends(get_campaign_by_api_key),
-    db: Session = Depends(get_db),
-) -> AgentConfigResponse:
-    payload = build_agent_config(campaign)
-    db.commit()
-    return AgentConfigResponse.model_validate(payload)
-
-
-@router.post("/{campaign_id}/events", response_model=AgentEventResponse)
-def post_campaign_agent_event(
-    payload: AgentEventRequest,
-    campaign: Campaign = Depends(get_campaign_by_api_key),
-    db: Session = Depends(get_db),
-) -> AgentEventResponse:
-    result = record_agent_event(db, campaign, payload.model_dump())
-    return AgentEventResponse.model_validate(result)
 
 
 @router.get("/{campaign_id}/openclaw-skill", response_model=OpenClawSkillBundleResponse)
