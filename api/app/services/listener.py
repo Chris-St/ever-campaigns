@@ -214,6 +214,7 @@ def build_default_brand_voice(campaign: Campaign) -> dict[str, Any]:
 def build_default_listener_config(campaign: Campaign) -> dict[str, Any]:
     aggressiveness = "balanced"
     return {
+        "listener_mode": "simulation",
         "aggressiveness": aggressiveness,
         "review_mode": "auto",
         "auto_post_after_approvals": 50,
@@ -310,6 +311,7 @@ def normalize_listener_config(config: dict[str, Any] | None) -> dict[str, Any]:
 
 def build_default_listener_config_for_values() -> dict[str, Any]:
     return {
+        "listener_mode": "simulation",
         "aggressiveness": "balanced",
         "review_mode": "auto",
         "auto_post_after_approvals": 50,
@@ -384,6 +386,22 @@ def effective_listener_status(campaign: Campaign) -> str:
     return campaign.listener_status or "stopped"
 
 
+def listener_mode(campaign: Campaign) -> str:
+    ensure_listener_defaults(campaign)
+    return campaign.listener_config.get("listener_mode", "simulation")
+
+
+def refresh_simulation_if_needed(db: Session, campaign: Campaign, force: bool = False) -> None:
+    if listener_mode(campaign) != "simulation":
+        return
+    if effective_listener_status(campaign) != "running":
+        return
+    seed_listener_history(db, campaign)
+    maybe_generate_fresh_signals(db, campaign, force=force)
+    db.commit()
+    db.refresh(campaign)
+
+
 def build_brand_voice_text(campaign: Campaign) -> str:
     profile = campaign.brand_voice_profile
     story = profile.get("story", "")
@@ -415,6 +433,9 @@ def parse_interaction_id(referral_url: str | None) -> str | None:
 
 
 def parse_source_channel(payload: dict[str, Any]) -> str:
+    explicit_channel = payload.get("subreddit_or_channel")
+    if explicit_channel and str(explicit_channel).strip():
+        return str(explicit_channel).strip()
     source_url = payload.get("source_url")
     if not source_url:
         return payload["surface"]
@@ -442,6 +463,7 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
     api_key = ensure_campaign_api_key(campaign)
     profile = campaign.brand_voice_profile
     safeguards = campaign.listener_config.get("safeguards", {})
+    live_status = effective_listener_status(campaign)
     surfaces = {
         surface["type"]: {
             "enabled": bool(surface.get("enabled", True)),
@@ -462,6 +484,7 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
                 "currency": product.currency,
                 "description": product.description,
                 "category": product.category,
+                "attributes": attributes,
                 "material": attributes.get("material"),
                 "activities": attributes.get("activities", []),
                 "url": product.source_url,
@@ -471,11 +494,13 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
 
     return {
         "campaign_id": campaign.id,
+        "status": live_status,
         "campaign_status": campaign.status,
         "brand": {
             "name": profile.get("brand_name") or campaign.merchant.name or "Brand",
             "domain": campaign.merchant.domain,
             "voice": build_brand_voice_text(campaign),
+            "story": profile.get("story"),
             "dos": profile.get("dos", []),
             "donts": profile.get("donts", []),
             "disclosure": build_brand_disclosure(campaign),
@@ -484,12 +509,14 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
         "surfaces": surfaces,
         "rules": {
             "intent_threshold": int(campaign.listener_config.get("thresholds", {}).get("composite_min", 60)),
+            "max_responses_per_surface_per_day": int(safeguards.get("max_responses_per_surface_per_day", 10)),
             "max_responses_per_subreddit_per_day": int(safeguards.get("max_responses_per_surface_per_day", 10)),
             "max_responses_per_day": int(safeguards.get("max_responses_per_day", 50)),
             "min_minutes_between_responses_same_surface": int(safeguards.get("minimum_minutes_between_surface_responses", 5)),
             "never_respond_to_same_author_within_hours": int(safeguards.get("never_respond_to_same_author_within_hours", 24)),
             "never_respond_to_posts_younger_than_minutes": int(safeguards.get("minimum_post_age_minutes", 10)),
             "max_responses_per_thread": int(safeguards.get("max_thread_replies", 2)),
+            "always_disclose": bool(safeguards.get("always_disclose_ai", True)),
             "pause_if_downvote_rate_exceeds": float(safeguards.get("pause_if_downvote_rate_exceeds", 0.2)),
             "review_mode": campaign.listener_config.get("review_mode", "auto") == "manual",
             "auto_post_confidence_threshold": int(safeguards.get("auto_post_confidence_threshold", 70)),
@@ -846,7 +873,7 @@ def parse_event_timestamp(raw_timestamp: str) -> datetime:
 
 
 def should_create_response_record(event_type: str, action_taken: str) -> bool:
-    return event_type != "intent_detected" or action_taken != "skip"
+    return event_type != "intent_detected" and action_taken != "skip"
 
 
 def upsert_signal_from_event(
@@ -914,7 +941,13 @@ def create_response_from_event(
     if not should_create_response_record(payload["event_type"], payload["action_taken"]):
         return None, 0.0, False
 
-    interaction_id = parse_interaction_id(payload.get("referral_url")) or str(uuid4())
+    interaction_id = parse_interaction_id(payload.get("referral_url")) or signal.id
+    referral_url = payload.get("referral_url")
+    if not referral_url and payload.get("product_id"):
+        referral_url = (
+            f"{build_referral_base(payload['product_id'])}"
+            f"?src={payload['surface']}&cid={campaign.id}&iid={interaction_id}"
+        )
     response = db.scalar(
         select(AgentResponse).where(
             AgentResponse.campaign_id == campaign.id,
@@ -945,7 +978,7 @@ def create_response_from_event(
             product_id=payload.get("product_id"),
             surface=payload["surface"],
             response_text=payload.get("response_text") or "",
-            referral_url=payload.get("referral_url"),
+            referral_url=referral_url,
             url_placement="inline" if payload.get("action_taken") == "reply" else "separate_line",
             confidence=float(payload.get("intent_score", {}).get("composite", 0.0) or 0.0),
             platform_appropriate=True,
@@ -966,7 +999,7 @@ def create_response_from_event(
     else:
         already_posted_approved = response.posted and response.review_status in {"approved", "auto_approved"}
         response.response_text = payload.get("response_text") or response.response_text
-        response.referral_url = payload.get("referral_url") or response.referral_url
+        response.referral_url = referral_url or response.referral_url
         response.product_id = payload.get("product_id") or response.product_id
         response.surface = payload["surface"]
         response.posted = posted or response.posted
@@ -989,6 +1022,11 @@ def record_agent_event(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
+    if campaign.listener_config.get("listener_mode") != "live":
+        campaign.listener_config = {
+            **campaign.listener_config,
+            "listener_mode": "live",
+        }
     created_at = parse_event_timestamp(payload["timestamp"])
     signal, incremental_cost = upsert_signal_from_event(db, campaign, payload, created_at)
     response, response_cost, response_became_approved = create_response_from_event(
@@ -1005,7 +1043,7 @@ def record_agent_event(
         simulate_click_and_conversion(db, response)
 
     campaign.budget_spent = round(campaign.budget_spent + incremental_cost, 2)
-    campaign.listener_last_polled_at = created_at
+    campaign.listener_last_polled_at = utcnow()
     next_status = effective_listener_status(campaign)
     campaign.listener_status = "running" if next_status == "running" else next_status
 
@@ -1013,7 +1051,7 @@ def record_agent_event(
     db.refresh(campaign)
     budget_left = budget_remaining(campaign)
     return {
-        "event_id": response.id if response is not None else signal.id,
+        "event_id": signal.id,
         "status": "recorded",
         "budget_remaining": budget_left,
         "budget_exhausted": budget_left <= 0,
@@ -1118,6 +1156,8 @@ def maybe_generate_fresh_signals(db: Session, campaign: Campaign, force: bool = 
 
 def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
+    if refresh:
+        refresh_simulation_if_needed(db, campaign)
     today_start = datetime.combine(utcnow().date(), datetime.min.time(), tzinfo=timezone.utc)
     signals_today = db.scalars(
         select(IntentSignal).where(IntentSignal.campaign_id == campaign.id, IntentSignal.created_at >= today_start)
@@ -1189,10 +1229,15 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
 
 def start_listener(db: Session, campaign: Campaign) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
-    api_key = ensure_campaign_api_key(campaign)
     campaign.listener_status = "running"
     campaign.listener_started_at = campaign.listener_started_at or utcnow()
-    launch_openclaw_agent(campaign, api_key)
+    if listener_mode(campaign) == "live":
+        api_key = ensure_campaign_api_key(campaign)
+        launch_openclaw_agent(campaign, api_key)
+    else:
+        stop_openclaw_agent(campaign.id)
+        seed_listener_history(db, campaign)
+        maybe_generate_fresh_signals(db, campaign, force=True)
     db.commit()
     db.refresh(campaign)
     return build_listener_status(db, campaign, refresh=False)
@@ -1215,10 +1260,13 @@ def update_listener_config(
     ensure_listener_defaults(campaign)
     incoming_profile = payload.get("brand_voice_profile")
     incoming_config = payload.get("config")
+    previous_mode = listener_mode(campaign)
     if incoming_profile is not None:
         campaign.brand_voice_profile = normalize_brand_voice(incoming_profile, campaign)
     if incoming_config is not None:
         campaign.listener_config = normalize_listener_config(incoming_config)
+    if previous_mode == "live" and listener_mode(campaign) == "simulation":
+        stop_openclaw_agent(campaign.id)
     db.commit()
     db.refresh(campaign)
     return build_listener_status(db, campaign, refresh=False)
@@ -1226,6 +1274,7 @@ def update_listener_config(
 
 def review_queue(db: Session, campaign: Campaign) -> list[dict[str, Any]]:
     ensure_listener_defaults(campaign)
+    refresh_simulation_if_needed(db, campaign)
     responses = db.scalars(
         select(AgentResponse)
         .where(AgentResponse.campaign_id == campaign.id, AgentResponse.review_status == "pending")
@@ -1310,6 +1359,7 @@ def edit_response(db: Session, campaign: Campaign, response_id: str, response_te
 
 def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d") -> dict[str, Any]:
     ensure_listener_defaults(campaign)
+    refresh_simulation_if_needed(db, campaign)
     period_map = {"7d": 7, "30d": 30, "90d": 90}
     days = period_map.get(period, 120)
     start_at = utcnow() - timedelta(days=days - 1)

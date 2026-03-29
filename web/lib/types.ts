@@ -134,6 +134,7 @@ export interface ListenerSurfaceConfig {
 }
 
 export interface ListenerConfig {
+  listener_mode: "simulation" | "live";
   aggressiveness: "conservative" | "balanced" | "aggressive";
   review_mode: "manual" | "auto";
   auto_post_after_approvals: number;

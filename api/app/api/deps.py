@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, verify_api_key
 from app.db.session import SessionLocal
 from app.models.entities import Campaign, Merchant, User
 
@@ -62,3 +62,27 @@ def require_merchant_access(db: Session, merchant_id: str, user: User) -> Mercha
         if owned_campaign is None:
             raise HTTPException(status_code=403, detail="Merchant belongs to a different account")
     return merchant
+
+
+def get_campaign_by_api_key(
+    campaign_id: str,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> Campaign:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing campaign API key",
+        )
+    api_key = authorization.split(" ", 1)[1].strip()
+    campaign = db.scalar(
+        select(Campaign)
+        .where(Campaign.id == campaign_id)
+        .options(joinedload(Campaign.merchant).selectinload(Merchant.products))
+    )
+    if campaign is None or not verify_api_key(api_key, campaign.listener_api_key_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid campaign API key",
+        )
+    return campaign

@@ -156,6 +156,7 @@ class ListenerSurfaceConfig(BaseModel):
 
 
 class ListenerConfig(BaseModel):
+    listener_mode: Literal["simulation", "live"] = "simulation"
     aggressiveness: Literal["conservative", "balanced", "aggressive"] = "balanced"
     review_mode: Literal["manual", "auto"] = "manual"
     auto_post_after_approvals: int = 50
@@ -306,6 +307,7 @@ class AgentEventRequest(BaseModel):
     source_content: str
     source_author: str | None = None
     source_context: str | None = None
+    subreddit_or_channel: str | None = None
     intent_score: AgentIntentScore = Field(default_factory=AgentIntentScore)
     action_taken: Literal["reply", "dm", "email", "skip"]
     response_text: str | None = None
@@ -327,6 +329,7 @@ class AgentBrandConfig(BaseModel):
     name: str
     domain: str
     voice: str
+    story: str | None = None
     dos: list[str] = Field(default_factory=list)
     donts: list[str] = Field(default_factory=list)
     disclosure: str
@@ -339,6 +342,7 @@ class AgentProductConfig(BaseModel):
     currency: str
     description: str | None = None
     category: str | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
     material: str | None = None
     activities: list[str] = Field(default_factory=list)
     url: str | None = None
@@ -354,12 +358,14 @@ class AgentSurfaceRuleConfig(BaseModel):
 
 class AgentRulesConfig(BaseModel):
     intent_threshold: int
+    max_responses_per_surface_per_day: int
     max_responses_per_subreddit_per_day: int
     max_responses_per_day: int
     min_minutes_between_responses_same_surface: int
     never_respond_to_same_author_within_hours: int
     never_respond_to_posts_younger_than_minutes: int
     max_responses_per_thread: int
+    always_disclose: bool = True
     pause_if_downvote_rate_exceeds: float
     review_mode: bool
     auto_post_confidence_threshold: int
@@ -379,6 +385,7 @@ class AgentReportingConfig(BaseModel):
 
 class AgentConfigResponse(BaseModel):
     campaign_id: str
+    status: str | None = None
     campaign_status: str | None = None
     brand: AgentBrandConfig
     products: list[AgentProductConfig] = Field(default_factory=list)
@@ -386,6 +393,15 @@ class AgentConfigResponse(BaseModel):
     rules: AgentRulesConfig
     budget: AgentBudgetConfig
     reporting: AgentReportingConfig
+
+
+class OpenClawSkillBundleResponse(BaseModel):
+    campaign_id: str
+    brand_name: str
+    file_name: str = "SKILL.md"
+    config_file_name: str = "config.json"
+    skill_markdown: str
+    config_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class CampaignOverview(BaseModel):

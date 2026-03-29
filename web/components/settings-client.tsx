@@ -21,6 +21,8 @@ export function SettingsClient() {
     "active",
   );
   const [autoOptimize, setAutoOptimize] = useState(true);
+  const [listenerMode, setListenerMode] =
+    useState<ListenerStatus["config"]["listener_mode"]>("simulation");
   const [listenerAggressiveness, setListenerAggressiveness] =
     useState<ListenerStatus["config"]["aggressiveness"]>("balanced");
   const [listenerReviewMode, setListenerReviewMode] =
@@ -73,6 +75,7 @@ export function SettingsClient() {
       );
       setAutoOptimize(response.auto_optimize);
       setListenerStatus(nextListenerStatus);
+      setListenerMode(nextListenerStatus.config.listener_mode);
       setListenerAggressiveness(nextListenerStatus.config.aggressiveness);
       setListenerReviewMode(nextListenerStatus.config.review_mode);
       setListenerTone(nextListenerStatus.brand_voice_profile.tone);
@@ -133,6 +136,7 @@ export function SettingsClient() {
     try {
       const nextConfig = {
         ...listenerStatus.config,
+        listener_mode: listenerMode,
         aggressiveness: listenerAggressiveness,
         review_mode: listenerReviewMode,
         thresholds:
@@ -175,6 +179,7 @@ export function SettingsClient() {
         },
       });
       setListenerStatus(response);
+      setListenerMode(response.config.listener_mode);
       setError(null);
     } catch (caughtError) {
       setError(
@@ -344,6 +349,25 @@ export function SettingsClient() {
 
                 <div className="mt-6 space-y-5">
                   <div className="grid gap-4 md:grid-cols-2">
+                    <label className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
+                      <span className="text-sm text-slate-300">Signal source</span>
+                      <select
+                        value={listenerMode}
+                        onChange={(event) =>
+                          setListenerMode(
+                            event.target.value as ListenerStatus["config"]["listener_mode"],
+                          )
+                        }
+                        className="mt-3 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                      >
+                        <option value="simulation">Simulation</option>
+                        <option value="live">Live OpenClaw agent</option>
+                      </select>
+                      <p className="mt-3 text-sm leading-7 text-slate-400">
+                        Simulation keeps the seeded demo flow alive. Live mode stops fake signal
+                        generation and waits for real OpenClaw bridge events.
+                      </p>
+                    </label>
                     <label className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
                       <span className="text-sm text-slate-300">Aggressiveness</span>
                       <select

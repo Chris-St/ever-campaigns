@@ -1,50 +1,43 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_db
-from app.core.security import verify_api_key
-from app.models.entities import Campaign, Merchant
+from app.api.deps import (
+    get_campaign_by_api_key,
+    get_current_user,
+    get_db,
+    require_campaign_access,
+)
+from app.models.entities import Campaign, Merchant, User
 from app.schemas.contracts import (
     AgentConfigResponse,
     AgentEventRequest,
     AgentEventResponse,
+    OpenClawSkillBundleResponse,
 )
-from app.services.listener import build_agent_config, record_agent_event
+from app.services.listener import build_agent_config, ensure_campaign_api_key, record_agent_event
+from app.services.openclaw_runtime import build_openclaw_skill_bundle
 
 
 router = APIRouter(prefix="/api/campaigns", tags=["agent-runtime"])
 
 
-def get_agent_campaign(
-    campaign_id: str,
-    authorization: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> Campaign:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing campaign API key",
-        )
-    api_key = authorization.split(" ", 1)[1].strip()
+def load_campaign_with_products(db: Session, campaign_id: str) -> Campaign:
     campaign = db.scalar(
         select(Campaign)
         .where(Campaign.id == campaign_id)
         .options(joinedload(Campaign.merchant).selectinload(Merchant.products))
     )
-    if campaign is None or not verify_api_key(api_key, campaign.listener_api_key_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid campaign API key",
-        )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
 
 
 @router.get("/{campaign_id}/agent-config", response_model=AgentConfigResponse)
 def get_campaign_agent_config(
-    campaign: Campaign = Depends(get_agent_campaign),
+    campaign: Campaign = Depends(get_campaign_by_api_key),
     db: Session = Depends(get_db),
 ) -> AgentConfigResponse:
     payload = build_agent_config(campaign)
@@ -55,8 +48,24 @@ def get_campaign_agent_config(
 @router.post("/{campaign_id}/events", response_model=AgentEventResponse)
 def post_campaign_agent_event(
     payload: AgentEventRequest,
-    campaign: Campaign = Depends(get_agent_campaign),
+    campaign: Campaign = Depends(get_campaign_by_api_key),
     db: Session = Depends(get_db),
 ) -> AgentEventResponse:
     result = record_agent_event(db, campaign, payload.model_dump())
     return AgentEventResponse.model_validate(result)
+
+
+@router.get("/{campaign_id}/openclaw-skill", response_model=OpenClawSkillBundleResponse)
+def get_campaign_openclaw_skill_bundle(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> OpenClawSkillBundleResponse:
+    require_campaign_access(db, campaign_id, current_user)
+    campaign = load_campaign_with_products(db, campaign_id)
+    api_key = ensure_campaign_api_key(campaign)
+    db.commit()
+    db.refresh(campaign)
+    return OpenClawSkillBundleResponse.model_validate(
+        build_openclaw_skill_bundle(campaign, api_key)
+    )

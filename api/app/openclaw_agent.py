@@ -156,7 +156,11 @@ def can_respond(
 ) -> bool:
     if counters["responses_by_day"][current_day] >= rules["max_responses_per_day"]:
         return False
-    if counters["responses_by_surface"][f"{current_day}:{template['surface']}"] >= rules["max_responses_per_subreddit_per_day"]:
+    surface_limit = rules.get(
+        "max_responses_per_surface_per_day",
+        rules["max_responses_per_subreddit_per_day"],
+    )
+    if counters["responses_by_surface"][f"{current_day}:{template['surface']}"] >= surface_limit:
         return False
     author_key = f"{current_day}:{template['author']}"
     if counters["authors_today"][author_key] >= 1:
@@ -233,6 +237,7 @@ def main() -> int:
 
             if (
                 not config["budget"]["remaining"]
+                or config.get("status") in {"paused", "stopped", "budget_exhausted"}
                 or config.get("campaign_status") == "paused"
                 or not config.get("products")
             ):
