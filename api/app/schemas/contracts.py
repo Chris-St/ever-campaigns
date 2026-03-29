@@ -128,6 +128,16 @@ class BrandVoiceProfile(BaseModel):
     sample_responses: dict[str, str] = Field(default_factory=dict)
 
 
+class BrandContextProfile(BaseModel):
+    positioning: str = ""
+    ideal_customer: str = ""
+    key_messages: list[str] = Field(default_factory=list)
+    proof_points: list[str] = Field(default_factory=list)
+    objection_handling: list[str] = Field(default_factory=list)
+    prohibited_claims: list[str] = Field(default_factory=list)
+    additional_context: str = ""
+
+
 class ListenerThresholds(BaseModel):
     composite_min: int = 70
     receptivity_min: int = 60
@@ -188,11 +198,13 @@ class ListenerStatus(BaseModel):
     compute_spent_today: float
     approved_response_count: int
     brand_voice_profile: BrandVoiceProfile
+    brand_context_profile: BrandContextProfile
     config: ListenerConfig
 
 
 class ListenerConfigUpdateRequest(BaseModel):
     brand_voice_profile: BrandVoiceProfile | None = None
+    brand_context_profile: BrandContextProfile | None = None
     config: ListenerConfig | None = None
 
 
@@ -389,6 +401,16 @@ class AgentConstraintsConfig(BaseModel):
     max_actions_per_day: int
 
 
+class AgentContextConfig(BaseModel):
+    positioning: str = ""
+    ideal_customer: str = ""
+    key_messages: list[str] = Field(default_factory=list)
+    proof_points: list[str] = Field(default_factory=list)
+    objection_handling: list[str] = Field(default_factory=list)
+    prohibited_claims: list[str] = Field(default_factory=list)
+    additional_context: str = ""
+
+
 class AgentBudgetConfig(BaseModel):
     monthly: float
     spent: float
@@ -410,6 +432,7 @@ class AgentConfigResponse(BaseModel):
     budget: AgentBudgetConfig
     reporting: AgentReportingConfig
     constraints: AgentConstraintsConfig
+    context: AgentContextConfig
 
 
 class OpenClawSkillBundleResponse(BaseModel):

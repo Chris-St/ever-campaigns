@@ -7,11 +7,13 @@ import { useRouter } from "next/navigation";
 import { Logo } from "@/components/logo";
 import { useAuth } from "@/components/auth-provider";
 import { apiRequest } from "@/lib/api";
+import { linesToList, listToLines } from "@/lib/agent-brain";
 import { setActiveCampaignId } from "@/lib/auth";
 import { formatCurrency, formatMultiplier, formatNumber } from "@/lib/format";
 import { fallbackImageSrc } from "@/lib/image";
 import type {
   BillingCheckoutResponse,
+  BrandContextProfile,
   BrandVoiceProfile,
   CampaignOverview,
   ListenerStatus,
@@ -40,11 +42,12 @@ export function OnboardingWizard() {
   const [storeUrl, setStoreUrl] = useState("https://biaundies.com");
   const [scanResult, setScanResult] = useState<StoreScanResponse | null>(null);
   const [products, setProducts] = useState<StructuredProduct[]>([]);
-  const [budget, setBudget] = useState(500);
+  const [budget, setBudget] = useState(50);
   const [campaign, setCampaign] = useState<CampaignOverview | null>(null);
   const [checkoutResponse, setCheckoutResponse] = useState<BillingCheckoutResponse | null>(null);
   const [listenerStatus, setListenerStatus] = useState<ListenerStatus | null>(null);
   const [brandVoice, setBrandVoice] = useState<BrandVoiceProfile | null>(null);
+  const [brandContext, setBrandContext] = useState<BrandContextProfile | null>(null);
   const [aggressiveness, setAggressiveness] =
     useState<ListenerStatus["config"]["aggressiveness"]>("balanced");
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -86,6 +89,13 @@ export function OnboardingWizard() {
     value: BrandVoiceProfile[K],
   ) {
     setBrandVoice((current) => (current ? { ...current, [key]: value } : current));
+  }
+
+  function updateBrandContextField<K extends keyof BrandContextProfile>(
+    key: K,
+    value: BrandContextProfile[K],
+  ) {
+    setBrandContext((current) => (current ? { ...current, [key]: value } : current));
   }
 
   async function handleScanStore() {
@@ -182,6 +192,7 @@ export function OnboardingWizard() {
       setCampaign(liveCampaign);
       setListenerStatus(nextListenerStatus);
       setBrandVoice(nextListenerStatus.brand_voice_profile);
+      setBrandContext(nextListenerStatus.brand_context_profile);
       setAggressiveness(nextListenerStatus.config.aggressiveness);
       await refreshUser(token);
       setStep(5);
@@ -193,7 +204,7 @@ export function OnboardingWizard() {
   }
 
   async function handleLaunchAgent() {
-    if (!token || !campaign || !listenerStatus || !brandVoice) {
+    if (!token || !campaign || !listenerStatus || !brandVoice || !brandContext) {
       return;
     }
     setBusyLabel("Launching autonomous agent...");
@@ -205,6 +216,7 @@ export function OnboardingWizard() {
         token,
         body: {
           brand_voice_profile: brandVoice,
+          brand_context_profile: brandContext,
           config: {
             ...listenerStatus.config,
             aggressiveness,
@@ -517,13 +529,14 @@ export function OnboardingWizard() {
             </div>
           ) : null}
 
-          {step === 5 && brandVoice ? (
+          {step === 5 && brandVoice && brandContext ? (
             <div className="space-y-6">
               <div className="space-y-2">
                 <p className="eyebrow">Step 5</p>
                 <h2 className="font-display text-3xl text-white">Review your agent</h2>
                 <p className="max-w-3xl text-sm leading-7 text-slate-400">
-                  The agent now has a catalog, a compute budget, and a brand identity. It will decide which channels and tactics are most efficient.
+                  The agent now has a catalog, a compute budget, a brand identity, and an agent
+                  brain. Dump as much useful context here as you want before the first experiment.
                 </p>
               </div>
 
@@ -542,6 +555,120 @@ export function OnboardingWizard() {
                       rows={5}
                       className="mt-4 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
                     />
+                  </div>
+
+                  <div className="rounded-[1.6rem] border border-white/8 bg-white/4 p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Agent brain</p>
+                        <p className="mt-2 text-sm leading-7 text-slate-400">
+                          This is where you teach the agent the brand beyond tone: positioning,
+                          proof points, objections, and hard boundaries.
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-white/6 px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-slate-300">
+                        Paste-friendly
+                      </span>
+                    </div>
+
+                    <div className="mt-5 space-y-4">
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Positioning</span>
+                        <textarea
+                          value={brandContext.positioning}
+                          onChange={(event) =>
+                            updateBrandContextField("positioning", event.target.value)
+                          }
+                          rows={3}
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Ideal customer</span>
+                        <textarea
+                          value={brandContext.ideal_customer}
+                          onChange={(event) =>
+                            updateBrandContextField("ideal_customer", event.target.value)
+                          }
+                          rows={3}
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Key messages</span>
+                        <textarea
+                          value={listToLines(brandContext.key_messages)}
+                          onChange={(event) =>
+                            updateBrandContextField("key_messages", linesToList(event.target.value))
+                          }
+                          rows={4}
+                          placeholder="One message per line"
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <label className="block">
+                          <span className="text-sm text-slate-300">Proof points</span>
+                          <textarea
+                            value={listToLines(brandContext.proof_points)}
+                            onChange={(event) =>
+                              updateBrandContextField("proof_points", linesToList(event.target.value))
+                            }
+                            rows={4}
+                            placeholder="One proof point per line"
+                            className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="text-sm text-slate-300">Objection handling</span>
+                          <textarea
+                            value={listToLines(brandContext.objection_handling)}
+                            onChange={(event) =>
+                              updateBrandContextField(
+                                "objection_handling",
+                                linesToList(event.target.value),
+                              )
+                            }
+                            rows={4}
+                            placeholder="How the agent should respond to hesitations"
+                            className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                          />
+                        </label>
+                      </div>
+
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Prohibited claims or topics</span>
+                        <textarea
+                          value={listToLines(brandContext.prohibited_claims)}
+                          onChange={(event) =>
+                            updateBrandContextField(
+                              "prohibited_claims",
+                              linesToList(event.target.value),
+                            )
+                          }
+                          rows={4}
+                          placeholder="One hard boundary per line"
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Additional context</span>
+                        <textarea
+                          value={brandContext.additional_context}
+                          onChange={(event) =>
+                            updateBrandContextField("additional_context", event.target.value)
+                          }
+                          rows={6}
+                          placeholder="Paste FAQs, sizing notes, founder story, campaign notes, competitor context, channel do's and don'ts, or anything else the agent should know."
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+                    </div>
                   </div>
 
                   <div className="rounded-[1.6rem] border border-white/8 bg-white/4 p-5">

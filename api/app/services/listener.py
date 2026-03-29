@@ -275,6 +275,71 @@ def build_default_brand_voice(campaign: Campaign) -> dict[str, Any]:
     }
 
 
+def build_default_brand_context(campaign: Campaign) -> dict[str, Any]:
+    merchant = campaign.merchant
+    brand_name = merchant.name or merchant.domain.split(".")[0].title()
+    products = get_products_for_campaign(campaign) or merchant.products
+    ships_to = sorted(
+        {
+            destination
+            for product in products
+            for destination in (
+                product.attributes.get("ships_to", []) if isinstance(product.attributes, dict) else []
+            )
+        }
+    ) or merchant.ships_to
+    made_in_values = sorted(
+        {
+            str(product.attributes.get("made_in")).strip()
+            for product in products
+            if isinstance(product.attributes, dict) and product.attributes.get("made_in")
+        }
+    )
+    has_free_shipping = any(
+        isinstance(product.attributes, dict) and bool(product.attributes.get("free_shipping"))
+        for product in products
+    )
+    target_customer = (
+        campaign.brand_voice_profile.get("target_customer")
+        or build_default_brand_voice(campaign).get("target_customer")
+        or "People looking for premium, thoughtfully-built essentials."
+    )
+    proof_points = []
+    if made_in_values:
+        proof_points.append(f"Made in {', '.join(made_in_values)}")
+    if ships_to:
+        proof_points.append(f"Ships to {', '.join(ships_to)}")
+    if has_free_shipping:
+        proof_points.append("Free shipping is available on the store")
+    if products:
+        proof_points.append(f"Catalog currently includes {len(products)} active products")
+
+    return {
+        "positioning": (
+            f"{brand_name} is a premium direct-to-consumer brand focused on thoughtful product fit, "
+            "clear utility, and understated quality."
+        ),
+        "ideal_customer": target_customer,
+        "key_messages": [
+            "Lead with product fit and customer relevance before promotion",
+            "Reference concrete features already present in the catalog",
+            "Frame the brand as premium, confident, and useful rather than discount-driven",
+        ],
+        "proof_points": proof_points,
+        "objection_handling": [
+            "If fit is weak, say so and avoid forcing the recommendation",
+            "If pricing comes up, justify value through quality, material, and use-case fit",
+            "If a shopper asks for proof, point to catalog attributes and product details already available",
+        ],
+        "prohibited_claims": [
+            "Do not make medical claims",
+            "Do not invent material, sizing, shipping, or performance claims",
+            "Do not promise discounts, limited offers, or stock urgency unless explicitly configured",
+        ],
+        "additional_context": "",
+    }
+
+
 def build_default_listener_config(campaign: Campaign) -> dict[str, Any]:
     aggressiveness = "balanced"
     profile = AGGRESSIVENESS_PROFILES[aggressiveness]
@@ -380,8 +445,28 @@ def normalize_brand_voice(profile: dict[str, Any] | None, campaign: Campaign) ->
     return merge_dicts(defaults, profile)
 
 
+def normalize_brand_context(profile: dict[str, Any] | None, campaign: Campaign) -> dict[str, Any]:
+    defaults = build_default_brand_context(campaign)
+    normalized = merge_dicts(defaults, profile)
+    for field in (
+        "key_messages",
+        "proof_points",
+        "objection_handling",
+        "prohibited_claims",
+    ):
+        normalized[field] = [
+            str(item).strip()
+            for item in normalized.get(field, [])
+            if str(item).strip()
+        ]
+    for field in ("positioning", "ideal_customer", "additional_context"):
+        normalized[field] = str(normalized.get(field, "") or "").strip()
+    return normalized
+
+
 def ensure_listener_defaults(campaign: Campaign) -> None:
     campaign.brand_voice_profile = normalize_brand_voice(campaign.brand_voice_profile, campaign)
+    campaign.brand_context_profile = normalize_brand_context(campaign.brand_context_profile, campaign)
     if campaign.listener_config:
         campaign.listener_config = normalize_listener_config(campaign.listener_config)
     else:
@@ -872,6 +957,7 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
     api_key = ensure_campaign_api_key(campaign)
     profile = campaign.brand_voice_profile
+    context = campaign.brand_context_profile
     safeguards = campaign.listener_config.get("safeguards", {})
     live_status = effective_listener_status(campaign)
     products = []
@@ -930,6 +1016,15 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
                 campaign.listener_config.get("max_actions_per_day")
                 or safeguards.get("max_actions_per_day", 50)
             ),
+        },
+        "context": {
+            "positioning": context.get("positioning", ""),
+            "ideal_customer": context.get("ideal_customer", ""),
+            "key_messages": context.get("key_messages", []),
+            "proof_points": context.get("proof_points", []),
+            "objection_handling": context.get("objection_handling", []),
+            "prohibited_claims": context.get("prohibited_claims", []),
+            "additional_context": context.get("additional_context", ""),
         },
     }
 
@@ -1610,6 +1705,7 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
         "compute_spent_today": compute_spent_today,
         "approved_response_count": campaign.approved_response_count,
         "brand_voice_profile": campaign.brand_voice_profile,
+        "brand_context_profile": campaign.brand_context_profile,
         "config": campaign.listener_config,
     }
 
@@ -1646,10 +1742,13 @@ def update_listener_config(
 ) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
     incoming_profile = payload.get("brand_voice_profile")
+    incoming_context = payload.get("brand_context_profile")
     incoming_config = payload.get("config")
     previous_mode = listener_mode(campaign)
     if incoming_profile is not None:
         campaign.brand_voice_profile = normalize_brand_voice(incoming_profile, campaign)
+    if incoming_context is not None:
+        campaign.brand_context_profile = normalize_brand_context(incoming_context, campaign)
     if incoming_config is not None:
         campaign.listener_config = normalize_listener_config(incoming_config)
     if previous_mode == "live" and listener_mode(campaign) == "simulation":

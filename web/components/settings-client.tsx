@@ -7,9 +7,10 @@ import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/app-header";
 import { useAuth } from "@/components/auth-provider";
 import { apiRequest } from "@/lib/api";
+import { linesToList, listToLines } from "@/lib/agent-brain";
 import { getActiveCampaignId, setActiveCampaignId } from "@/lib/auth";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
-import type { CampaignOverview, ListenerStatus } from "@/lib/types";
+import type { BrandContextProfile, CampaignOverview, ListenerStatus } from "@/lib/types";
 
 const aggressivenessProfiles = {
   conservative: { max_actions_per_day: 25, quality_threshold: 78 },
@@ -29,6 +30,7 @@ export function SettingsClient() {
     useState<ListenerStatus["config"]["aggressiveness"]>("balanced");
   const [listenerTone, setListenerTone] = useState("");
   const [listenerStory, setListenerStory] = useState("");
+  const [brandContext, setBrandContext] = useState<BrandContextProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [listenerSaving, setListenerSaving] = useState(false);
@@ -74,6 +76,7 @@ export function SettingsClient() {
       setListenerAggressiveness(nextListenerStatus.config.aggressiveness);
       setListenerTone(nextListenerStatus.brand_voice_profile.tone);
       setListenerStory(nextListenerStatus.brand_voice_profile.story);
+      setBrandContext(nextListenerStatus.brand_context_profile);
       setError(null);
     } catch (caughtError) {
       setError(
@@ -110,7 +113,7 @@ export function SettingsClient() {
   }
 
   async function handleSaveAgentSettings() {
-    if (!token || !campaign || !listenerStatus) {
+    if (!token || !campaign || !listenerStatus || !brandContext) {
       return;
     }
     setListenerSaving(true);
@@ -125,6 +128,7 @@ export function SettingsClient() {
             tone: listenerTone,
             story: listenerStory,
           },
+          brand_context_profile: brandContext,
           config: {
             ...listenerStatus.config,
             listener_mode: listenerMode,
@@ -174,7 +178,7 @@ export function SettingsClient() {
     }
   }
 
-  if (loading || !token || !campaign || !listenerStatus) {
+  if (loading || !token || !campaign || !listenerStatus || !brandContext) {
     return (
       <div className="flex min-h-screen items-center justify-center px-6 text-slate-300">
         {error ?? "Loading settings..."}
@@ -334,6 +338,142 @@ export function SettingsClient() {
                     className="mt-3 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
                   />
                 </label>
+
+                <section className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <span className="text-sm text-slate-300">Agent brain</span>
+                      <p className="mt-3 text-sm leading-7 text-slate-400">
+                        Add the context you would normally brief a human growth operator on before
+                        they touch the brand.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-white/10 bg-white/6 px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-slate-300">
+                      Brand context
+                    </span>
+                  </div>
+
+                  <div className="mt-5 space-y-4">
+                    <label className="block">
+                      <span className="text-sm text-slate-300">Positioning</span>
+                      <textarea
+                        value={brandContext.positioning}
+                        onChange={(event) =>
+                          setBrandContext((current) =>
+                            current ? { ...current, positioning: event.target.value } : current,
+                          )
+                        }
+                        rows={3}
+                        className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-sm text-slate-300">Ideal customer</span>
+                      <textarea
+                        value={brandContext.ideal_customer}
+                        onChange={(event) =>
+                          setBrandContext((current) =>
+                            current ? { ...current, ideal_customer: event.target.value } : current,
+                          )
+                        }
+                        rows={3}
+                        className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-sm text-slate-300">Key messages</span>
+                      <textarea
+                        value={listToLines(brandContext.key_messages)}
+                        onChange={(event) =>
+                          setBrandContext((current) =>
+                            current
+                              ? { ...current, key_messages: linesToList(event.target.value) }
+                              : current,
+                          )
+                        }
+                        rows={4}
+                        placeholder="One message per line"
+                        className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                      />
+                    </label>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Proof points</span>
+                        <textarea
+                          value={listToLines(brandContext.proof_points)}
+                          onChange={(event) =>
+                            setBrandContext((current) =>
+                              current
+                                ? { ...current, proof_points: linesToList(event.target.value) }
+                                : current,
+                            )
+                          }
+                          rows={4}
+                          placeholder="One proof point per line"
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+
+                      <label className="block">
+                        <span className="text-sm text-slate-300">Objection handling</span>
+                        <textarea
+                          value={listToLines(brandContext.objection_handling)}
+                          onChange={(event) =>
+                            setBrandContext((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    objection_handling: linesToList(event.target.value),
+                                  }
+                                : current,
+                            )
+                          }
+                          rows={4}
+                          placeholder="How the agent should handle hesitations"
+                          className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                        />
+                      </label>
+                    </div>
+
+                    <label className="block">
+                      <span className="text-sm text-slate-300">Prohibited claims or topics</span>
+                      <textarea
+                        value={listToLines(brandContext.prohibited_claims)}
+                        onChange={(event) =>
+                          setBrandContext((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  prohibited_claims: linesToList(event.target.value),
+                                }
+                              : current,
+                          )
+                        }
+                        rows={4}
+                        placeholder="One hard boundary per line"
+                        className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-sm text-slate-300">Additional context</span>
+                      <textarea
+                        value={brandContext.additional_context}
+                        onChange={(event) =>
+                          setBrandContext((current) =>
+                            current ? { ...current, additional_context: event.target.value } : current,
+                          )
+                        }
+                        rows={6}
+                        placeholder="Paste FAQs, sizing notes, founder story, campaign goals, channel advice, competitor context, or anything else the agent should know."
+                        className="mt-2 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                      />
+                    </label>
+                  </div>
+                </section>
 
                 <button
                   onClick={handleSaveAgentSettings}

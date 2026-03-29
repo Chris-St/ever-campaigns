@@ -38,6 +38,7 @@ def ensure_runtime_schema() -> None:
         ("campaigns", "listener_api_key_hash"): "ALTER TABLE campaigns ADD COLUMN listener_api_key_hash VARCHAR",
         ("campaigns", "listener_api_key_last_four"): "ALTER TABLE campaigns ADD COLUMN listener_api_key_last_four VARCHAR",
         ("campaigns", "brand_voice_profile"): "ALTER TABLE campaigns ADD COLUMN brand_voice_profile JSON",
+        ("campaigns", "brand_context_profile"): "ALTER TABLE campaigns ADD COLUMN brand_context_profile JSON",
         ("campaigns", "listener_config"): "ALTER TABLE campaigns ADD COLUMN listener_config JSON",
         ("campaigns", "listener_status"): "ALTER TABLE campaigns ADD COLUMN listener_status VARCHAR DEFAULT 'stopped'",
         ("campaigns", "listener_started_at"): "ALTER TABLE campaigns ADD COLUMN listener_started_at DATETIME",
@@ -129,6 +130,9 @@ def ensure_runtime_schema() -> None:
             )
             connection.execute(
                 text("UPDATE campaigns SET brand_voice_profile = '{}' WHERE brand_voice_profile IS NULL")
+            )
+            connection.execute(
+                text("UPDATE campaigns SET brand_context_profile = '{}' WHERE brand_context_profile IS NULL")
             )
             connection.execute(
                 text("UPDATE campaigns SET listener_config = '{}' WHERE listener_config IS NULL")

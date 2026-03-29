@@ -109,6 +109,16 @@ export interface BrandVoiceProfile {
   sample_responses: Record<string, string>;
 }
 
+export interface BrandContextProfile {
+  positioning: string;
+  ideal_customer: string;
+  key_messages: string[];
+  proof_points: string[];
+  objection_handling: string[];
+  prohibited_claims: string[];
+  additional_context: string;
+}
+
 export interface ListenerThresholds {
   composite_min: number;
   receptivity_min: number;
@@ -169,6 +179,7 @@ export interface ListenerStatus {
   compute_spent_today: number;
   approved_response_count: number;
   brand_voice_profile: BrandVoiceProfile;
+  brand_context_profile: BrandContextProfile;
   config: ListenerConfig;
 }
 

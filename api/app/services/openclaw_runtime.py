@@ -15,6 +15,8 @@ from app.core.config import BASE_DIR, settings
 REPO_ROOT = BASE_DIR.parent
 PROCESS_RUNTIME_ROOT = BASE_DIR / ".runtime" / "openclaw"
 OPENCLAW_RUNTIME_ROOT = REPO_ROOT / ".openclaw" / "runtime" / "campaigns"
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -94,6 +96,7 @@ def build_openclaw_config_payload(campaign, api_key: str) -> dict[str, Any]:
 def build_runtime_skill(campaign, api_key: str) -> str:
     brand_name = campaign.brand_voice_profile.get("brand_name") or campaign.merchant.name or "Brand"
     profile = campaign.brand_voice_profile
+    context = campaign.brand_context_profile
     tone = profile.get("tone", "Helpful and confident")
     story = profile.get("story", "")
     dos = profile.get("dos", [])
@@ -148,6 +151,25 @@ Generate as much revenue as possible for {brand_name} while staying within your 
 
 ## Brand Don'ts
 {format_guideline_block(donts, "Do not ") or "- Do not sound generic or pushy."}
+
+## Brand Context
+- Positioning: {context.get("positioning") or "Use the catalog and brand voice as your primary source of truth."}
+- Ideal customer: {context.get("ideal_customer") or "People with clear product fit and purchase intent."}
+
+### Key Messages
+{format_guideline_block(context.get("key_messages", []), "") or "- Keep the recommendation tightly grounded in product fit."}
+
+### Proof Points
+{format_guideline_block(context.get("proof_points", []), "") or "- Use only proof points already grounded in the brand and catalog."}
+
+### Objection Handling
+{format_guideline_block(context.get("objection_handling", []), "") or "- Handle objections honestly and do not force the sale."}
+
+### Prohibited Claims
+{format_guideline_block(context.get("prohibited_claims", []), "Do not ") or "- Do not make unsupported claims."}
+
+### Additional Context
+{context.get("additional_context") or "No extra context provided yet. Stay conservative when details are missing."}
 
 ## Your Freedom
 You decide:

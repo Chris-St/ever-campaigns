@@ -110,11 +110,15 @@ def choose_product(products: list[dict[str, Any]], template: dict[str, str]) -> 
 
 def build_response_text(config: dict[str, Any], product: dict[str, Any]) -> str:
     disclosure = config["brand"]["disclosure"]
+    context = config.get("context", {})
     selling_points = product.get("key_selling_points", [])[:2]
     selling_line = ", ".join(selling_points) if selling_points else product["name"]
+    key_message = next((item for item in context.get("key_messages", []) if item), "")
+    proof_point = next((item for item in context.get("proof_points", []) if item), "")
+    opener = key_message or "Lead with the product fit and usefulness before pushing the sale."
+    proof_line = f" One useful proof point: {proof_point}." if proof_point else ""
     return (
-        f"If the goal is a better fit during movement, I'd bias toward something that stays put and feels premium. "
-        f"{product['name']} stands out because of {selling_line}. {disclosure}"
+        f"{opener} {product['name']} stands out because of {selling_line}.{proof_line} {disclosure}"
     )
 
 

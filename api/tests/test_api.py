@@ -27,6 +27,26 @@ def test_full_flow() -> None:
     research_timestamp = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
     action_timestamp = (now - timedelta(minutes=22)).isoformat().replace("+00:00", "Z")
     strategy_timestamp = (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    brand_context_profile = {
+        "positioning": "Bia makes premium movement essentials for women who care about fit, comfort, and quality.",
+        "ideal_customer": "Women who want premium underwear for running, training, and recovery.",
+        "key_messages": [
+            "Lead with fit and comfort during movement.",
+            "Stay premium and useful, never discount-driven.",
+        ],
+        "proof_points": [
+            "Made in Canada",
+            "Designed for high-movement training and recovery days",
+        ],
+        "objection_handling": [
+            "If pricing comes up, justify it through quality and fit instead of discounts.",
+        ],
+        "prohibited_claims": [
+            "Do not make medical claims.",
+            "Do not promise discounts unless explicitly configured.",
+        ],
+        "additional_context": "The founder built Bia after struggling to find underwear that stayed put during training.",
+    }
 
     signup = client.post(
         "/auth/signup",
@@ -83,6 +103,7 @@ def test_full_flow() -> None:
         headers=headers,
         json={
             "brand_voice_profile": listener_status.json()["brand_voice_profile"],
+            "brand_context_profile": brand_context_profile,
             "config": {
                 **listener_status.json()["config"],
                 "listener_mode": "live",
@@ -91,6 +112,7 @@ def test_full_flow() -> None:
     )
     assert updated_listener.status_code == 200
     assert updated_listener.json()["config"]["listener_mode"] == "live"
+    assert updated_listener.json()["brand_context_profile"]["positioning"].startswith("Bia makes premium")
 
     started_listener = client.post(f"/campaigns/{campaign_id}/listener/start", headers=headers)
     assert started_listener.status_code == 200
@@ -118,6 +140,7 @@ def test_full_flow() -> None:
     assert "Ever Autonomous Sales Agent" in openclaw_skill_text
     assert "/agent-config" in openclaw_skill_text
     assert "Which channels and platforms to use" in openclaw_skill_text
+    assert "Made in Canada" in openclaw_skill_text
     assert "Reddit-Specific Rules" not in openclaw_skill_text
 
     openclaw_skill_bundle = client.get(
@@ -156,6 +179,8 @@ def test_full_flow() -> None:
     assert agent_config_json["constraints"]["always_disclose_ai"] is True
     assert agent_config_json["constraints"]["max_actions_per_day"] >= 1
     assert agent_config_json["budget"]["remaining"] > 0
+    assert agent_config_json["context"]["positioning"].startswith("Bia makes premium")
+    assert "Made in Canada" in agent_config_json["context"]["proof_points"]
     assert "attributes" in agent_config_json["products"][0]
     assert len(agent_config_json["products"][0]["key_selling_points"]) >= 1
     product_id = agent_config_json["products"][0]["id"]

@@ -87,6 +87,7 @@ class Campaign(Base):
     listener_api_key_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     listener_api_key_last_four: Mapped[str | None] = mapped_column(String, nullable=True)
     brand_voice_profile: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    brand_context_profile: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     listener_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     listener_status: Mapped[str] = mapped_column(String, default="stopped")
     listener_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
