@@ -183,7 +183,7 @@ def get_campaign_agent_config(
     campaign: Campaign = Depends(get_campaign_by_api_key),
     db: Session = Depends(get_db),
 ) -> AgentConfigResponse:
-    payload = build_agent_config(campaign)
+    payload = build_agent_config(db, campaign)
     db.commit()
     return AgentConfigResponse.model_validate(payload)
 

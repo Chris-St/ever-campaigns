@@ -6,11 +6,17 @@ import { useRouter } from "next/navigation";
 
 import { AppHeader } from "@/components/app-header";
 import { useAuth } from "@/components/auth-provider";
+import { VoiceNoteCapture } from "@/components/voice-note-capture";
 import { apiRequest } from "@/lib/api";
 import { linesToList, listToLines } from "@/lib/agent-brain";
 import { getActiveCampaignId, setActiveCampaignId } from "@/lib/auth";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
-import type { BrandContextProfile, CampaignOverview, ListenerStatus } from "@/lib/types";
+import type {
+  BrandContextProfile,
+  CampaignOverview,
+  ContextItemRecord,
+  ListenerStatus,
+} from "@/lib/types";
 
 const aggressivenessProfiles = {
   conservative: { max_actions_per_day: 25, quality_threshold: 78 },
@@ -33,6 +39,10 @@ export function SettingsClient() {
   const [listenerTone, setListenerTone] = useState("");
   const [listenerStory, setListenerStory] = useState("");
   const [brandContext, setBrandContext] = useState<BrandContextProfile | null>(null);
+  const [contextItems, setContextItems] = useState<ContextItemRecord[]>([]);
+  const [competitionEnabled, setCompetitionEnabled] = useState(true);
+  const [contextTitle, setContextTitle] = useState("Operator note");
+  const [contextBody, setContextBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [listenerSaving, setListenerSaving] = useState(false);
@@ -60,12 +70,16 @@ export function SettingsClient() {
 
   async function loadCampaign(campaignId: string, resolvedToken: string) {
     try {
-      const [response, nextListenerStatus] = await Promise.all([
+      const [response, nextListenerStatus, nextContextItems] = await Promise.all([
         apiRequest<CampaignOverview>(`/campaigns/${campaignId}`, {
           method: "GET",
           token: resolvedToken,
         }),
         apiRequest<ListenerStatus>(`/campaigns/${campaignId}/listener/status`, {
+          method: "GET",
+          token: resolvedToken,
+        }),
+        apiRequest<ContextItemRecord[]>(`/campaigns/${campaignId}/context`, {
           method: "GET",
           token: resolvedToken,
         }),
@@ -87,6 +101,8 @@ export function SettingsClient() {
       setListenerTone(nextListenerStatus.brand_voice_profile.tone);
       setListenerStory(nextListenerStatus.brand_voice_profile.story);
       setBrandContext(nextListenerStatus.brand_context_profile);
+      setCompetitionEnabled(nextListenerStatus.config.competition.enabled);
+      setContextItems(nextContextItems);
       setError(null);
     } catch (caughtError) {
       setError(
@@ -145,6 +161,11 @@ export function SettingsClient() {
             aggressiveness: listenerAggressiveness,
             max_actions_per_day: profile.max_actions_per_day,
             quality_threshold: profile.quality_threshold,
+            competition: {
+              ...listenerStatus.config.competition,
+              enabled: competitionEnabled,
+              mode: competitionEnabled ? "best_of_n" : "single_lane",
+            },
             safeguards: {
               ...listenerStatus.config.safeguards,
               max_actions_per_day: profile.max_actions_per_day,
@@ -155,6 +176,7 @@ export function SettingsClient() {
       setListenerStatus(response);
       setListenerMode(response.config.listener_mode);
       setListenerAggressiveness(response.config.aggressiveness);
+      setCompetitionEnabled(response.config.competition.enabled);
       setError(null);
     } catch (caughtError) {
       setError(
@@ -197,6 +219,93 @@ export function SettingsClient() {
   }
 
   const profile = aggressivenessProfiles[listenerAggressiveness];
+
+  async function refreshContextItems() {
+    if (!token || !campaign) {
+      return;
+    }
+    const items = await apiRequest<ContextItemRecord[]>(`/campaigns/${campaign.id}/context`, {
+      method: "GET",
+      token,
+    });
+    setContextItems(items);
+  }
+
+  async function handleUploadFiles(fileList: FileList | null) {
+    if (!fileList || !token || !campaign) {
+      return;
+    }
+    setListenerSaving(true);
+    try {
+      for (const file of Array.from(fileList)) {
+        const formData = new FormData();
+        formData.append("file", file);
+        await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/upload`, {
+          method: "POST",
+          token,
+          body: formData,
+        });
+      }
+      await refreshContextItems();
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to upload context.");
+    } finally {
+      setListenerSaving(false);
+    }
+  }
+
+  async function handleSaveContext(kind: "brief" | "voice_note") {
+    if (!token || !campaign) {
+      return;
+    }
+    if (!contextBody.trim() && kind !== "voice_note") {
+      return;
+    }
+    setListenerSaving(true);
+    try {
+      await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/notes`, {
+        method: "POST",
+        token,
+        body: {
+          title: contextTitle,
+          content: contextBody,
+          kind,
+        },
+      });
+      setContextBody("");
+      await refreshContextItems();
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to save context.");
+    } finally {
+      setListenerSaving(false);
+    }
+  }
+
+  async function handleSaveVoiceTranscript(transcript: string) {
+    if (!token || !campaign || !transcript.trim()) {
+      return;
+    }
+    setListenerSaving(true);
+    try {
+      await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/notes`, {
+        method: "POST",
+        token,
+        body: {
+          title: `Voice note ${new Date().toLocaleTimeString()}`,
+          content: transcript,
+          kind: "voice_note",
+        },
+      });
+      await refreshContextItems();
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to save voice note.");
+    } finally {
+      setListenerSaving(false);
+    }
+  }
 
   return (
     <div className="min-h-screen">
@@ -316,13 +425,15 @@ export function SettingsClient() {
                       }
                       className="mt-3 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
                     >
-                      <option value="simulation">Simulation</option>
-                      <option value="live">Live OpenClaw agent</option>
-                    </select>
-                    <p className="mt-3 text-sm leading-7 text-slate-400">
-                      Simulation keeps the demo data flowing. Live mode launches the local propose-only runtime so every outbound action lands in the operator queue first.
-                    </p>
-                  </label>
+                    <option value="simulation">Simulation</option>
+                    <option value="live">Live OpenClaw agent</option>
+                  </select>
+                  <p className="mt-3 text-sm leading-7 text-slate-400">
+                      Simulation keeps the demo data flowing. Live mode launches the local
+                      objective-first runtime so it can hunt for the highest-efficiency revenue
+                      opportunities before anything is executed.
+                  </p>
+                </label>
 
                   <label className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
                     <span className="text-sm text-slate-300">Aggressiveness</span>
@@ -344,6 +455,18 @@ export function SettingsClient() {
                     </p>
                   </label>
                 </div>
+
+                <label className="flex items-start gap-3 rounded-[1.5rem] border border-white/8 bg-white/4 p-5 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={competitionEnabled}
+                    onChange={(event) => setCompetitionEnabled(event.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-white/10 bg-slate-950/70 text-emerald-400"
+                  />
+                  <span>
+                    Turn on model competition. Ever will let multiple planning lanes search and draft proposals, then rank them by expected Return on Compute.
+                  </span>
+                </label>
 
                 <label className="block rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
                   <span className="text-sm text-slate-300">Brand voice</span>
@@ -512,6 +635,66 @@ export function SettingsClient() {
           </div>
 
           <div className="space-y-6">
+            <section className="panel p-6">
+              <p className="eyebrow">Context</p>
+              <h2 className="font-display text-2xl text-white">Files, notes, and voice</h2>
+              <p className="mt-3 text-sm leading-7 text-slate-400">
+                Add more truth to the agent whenever you learn something new about the brand, offer, product language, or constraints.
+              </p>
+              <div className="mt-6 space-y-4">
+                <div className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
+                  <label className="inline-flex cursor-pointer rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10">
+                    Upload context files
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => void handleUploadFiles(event.target.files)}
+                    />
+                  </label>
+                  <div className="mt-4 space-y-3">
+                    {contextItems.slice(0, 5).map((item) => (
+                      <div key={item.id} className="rounded-[1rem] border border-white/8 bg-slate-950/55 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium text-white">{item.title}</p>
+                          <span className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                            {item.kind.replace("_", " ")}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm leading-7 text-slate-400">{item.summary}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
+                  <input
+                    value={contextTitle}
+                    onChange={(event) => setContextTitle(event.target.value)}
+                    className="w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                  />
+                  <textarea
+                    value={contextBody}
+                    onChange={(event) => setContextBody(event.target.value)}
+                    rows={5}
+                    placeholder="Type a founder note, new proof point, or any operator context the models should internalize."
+                    className="mt-3 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                  />
+                  <button
+                    onClick={() => void handleSaveContext("brief")}
+                    disabled={listenerSaving || !contextBody.trim()}
+                    className="mt-3 rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    Save context note
+                  </button>
+                </div>
+
+                <VoiceNoteCapture
+                  onComplete={(transcript) => void handleSaveVoiceTranscript(transcript)}
+                />
+              </div>
+            </section>
+
             <section className="panel p-6">
               <p className="eyebrow">Agent summary</p>
               <h2 className="font-display text-2xl text-white">Current operating profile</h2>

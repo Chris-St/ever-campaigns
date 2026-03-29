@@ -276,8 +276,9 @@ export function DashboardClient() {
               <p className="eyebrow">Autonomous agent</p>
               <h2 className="font-display text-2xl text-white">What the agent is actually doing</h2>
               <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">
-                Ever no longer assumes fixed channels. The agent decides where to spend compute,
-                reports opportunities as proposals, and waits for your approval before anything goes live.
+                Ever runs objective-first. The agent hunts for the best revenue opportunities it
+                can find across conversations, creators, search demand, and content gaps, then
+                routes the highest-efficiency plays into proposals for your approval.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -559,45 +560,67 @@ export function DashboardClient() {
 
           <section className="panel p-6">
             <div className="border-b border-white/8 pb-5">
-              <p className="eyebrow">Strategy feed</p>
-                <h2 className="font-display text-2xl text-white">How the agent thinks it is winning</h2>
+              <p className="eyebrow">Model competition</p>
+              <h2 className="font-display text-2xl text-white">Which model lanes are earning the budget</h2>
             </div>
             <div className="mt-5 space-y-3">
-              {listenerAnalytics.strategy_feed.length ? (
-                listenerAnalytics.strategy_feed.map((entry) => (
+              {listenerAnalytics.model_breakdown.length ? (
+                listenerAnalytics.model_breakdown.map((lane) => (
                   <article
-                    key={entry.id}
+                    key={`${lane.provider}-${lane.model}`}
                     className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4"
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-medium text-white">
-                        {formatDate(entry.timestamp)}
-                      </p>
-                      <span className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                        {entry.relative_time}
-                      </span>
-                    </div>
-                    <p className="mt-3 text-sm leading-7 text-slate-300">{entry.description}</p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {entry.channels_used.map((channel) => (
-                        <span
-                          key={`${entry.id}-${channel}`}
-                          className="rounded-full border border-white/10 bg-slate-950/60 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-300"
-                        >
-                          {channel}
-                        </span>
-                      ))}
+                      <div>
+                        <p className="text-sm font-medium text-white">{lane.label}</p>
+                        <p className="mt-2 text-sm text-slate-400">
+                          {formatNumber(lane.proposals)} proposals, {formatNumber(lane.approved)} approved,{" "}
+                          {formatNumber(lane.executed)} executed
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-display text-3xl text-white">
+                          {formatMultiplier(lane.return_on_compute)}
+                        </p>
+                        <p className="text-sm text-slate-400">{formatCurrency(lane.revenue)}</p>
+                      </div>
                     </div>
                     <p className="mt-4 text-xs uppercase tracking-[0.22em] text-slate-500">
-                      {formatNumber(entry.total_actions)} actions • {formatCurrency(entry.compute_cost)} compute
+                      {formatNumber(lane.conversions)} conversions • {formatCurrency(lane.compute_cost)} compute
                     </p>
                   </article>
                 ))
               ) : (
                 <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4 text-sm leading-7 text-slate-400">
-                  Strategy updates appear when the agent reports what it tried, what worked, and where it wants to spend compute next.
+                  Turn on model competition in setup or settings and fund the campaign to see which lane wins on Return on Compute.
                 </div>
               )}
+            </div>
+
+            <div className="mt-6 border-t border-white/8 pt-5">
+              <p className="eyebrow">Strategy feed</p>
+              <div className="mt-4 space-y-3">
+                {listenerAnalytics.strategy_feed.length ? (
+                  listenerAnalytics.strategy_feed.slice(0, 4).map((entry) => (
+                    <article
+                      key={entry.id}
+                      className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-white">{formatDate(entry.timestamp)}</p>
+                        <span className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                          {entry.relative_time}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm leading-7 text-slate-300">{entry.description}</p>
+                    </article>
+                  ))
+                ) : (
+                  <p className="text-sm leading-7 text-slate-400">
+                    Strategy updates will appear here once the runtime starts comparing live opportunities and reporting its learnings.
+                  </p>
+                )}
+              </div>
             </div>
           </section>
         </div>

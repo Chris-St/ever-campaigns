@@ -54,6 +54,11 @@ def ensure_runtime_schema() -> None:
         ("clicks", "response_id"): "ALTER TABLE clicks ADD COLUMN response_id VARCHAR",
         ("clicks", "proposal_id"): "ALTER TABLE clicks ADD COLUMN proposal_id VARCHAR",
         ("conversions", "channel"): "ALTER TABLE conversions ADD COLUMN channel VARCHAR DEFAULT 'mcp'",
+        ("proposals", "model_provider"): "ALTER TABLE proposals ADD COLUMN model_provider VARCHAR",
+        ("proposals", "model_name"): "ALTER TABLE proposals ADD COLUMN model_name VARCHAR",
+        ("proposals", "competition_score"): "ALTER TABLE proposals ADD COLUMN competition_score FLOAT DEFAULT 0",
+        ("agent_events", "model_provider"): "ALTER TABLE agent_events ADD COLUMN model_provider VARCHAR",
+        ("agent_events", "model_name"): "ALTER TABLE agent_events ADD COLUMN model_name VARCHAR",
     }
 
     with engine.begin() as connection:
@@ -169,6 +174,78 @@ def ensure_runtime_schema() -> None:
                 "created_at",
             }
 
+        if "agent_memories" not in table_columns:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE agent_memories (
+                        id VARCHAR PRIMARY KEY,
+                        campaign_id VARCHAR NOT NULL,
+                        proposal_id VARCHAR,
+                        product_id VARCHAR,
+                        kind VARCHAR DEFAULT 'lesson',
+                        title VARCHAR NOT NULL,
+                        summary TEXT NOT NULL,
+                        surface VARCHAR,
+                        action_type VARCHAR,
+                        source_url TEXT,
+                        details JSON,
+                        confidence FLOAT DEFAULT 0.5,
+                        created_at DATETIME
+                    )
+                    """
+                )
+            )
+            table_columns["agent_memories"] = {
+                "id",
+                "campaign_id",
+                "proposal_id",
+                "product_id",
+                "kind",
+                "title",
+                "summary",
+                "surface",
+                "action_type",
+                "source_url",
+                "details",
+                "confidence",
+                "created_at",
+            }
+
+        if "campaign_context_items" not in table_columns:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE campaign_context_items (
+                        id VARCHAR PRIMARY KEY,
+                        campaign_id VARCHAR NOT NULL,
+                        kind VARCHAR DEFAULT 'note',
+                        title VARCHAR NOT NULL,
+                        source_name VARCHAR,
+                        mime_type VARCHAR,
+                        content_text TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        storage_path TEXT,
+                        details JSON,
+                        created_at DATETIME
+                    )
+                    """
+                )
+            )
+            table_columns["campaign_context_items"] = {
+                "id",
+                "campaign_id",
+                "kind",
+                "title",
+                "source_name",
+                "mime_type",
+                "content_text",
+                "summary",
+                "storage_path",
+                "details",
+                "created_at",
+            }
+
         for (table_name, column_name), statement in alter_statements.items():
             if table_name in table_columns and column_name not in table_columns[table_name]:
                 connection.execute(text(statement))
@@ -214,6 +291,14 @@ def ensure_runtime_schema() -> None:
             connection.execute(text("UPDATE proposals SET intent_score = '{}' WHERE intent_score IS NULL"))
             connection.execute(text("UPDATE proposals SET status = 'proposed' WHERE status IS NULL"))
             connection.execute(text("UPDATE proposals SET action_type = 'other' WHERE action_type IS NULL"))
+            connection.execute(text("UPDATE proposals SET competition_score = 0 WHERE competition_score IS NULL"))
+
+        if "agent_memories" in table_columns or "agent_memories" in inspector.get_table_names():
+            connection.execute(text("UPDATE agent_memories SET details = '{}' WHERE details IS NULL"))
+            connection.execute(text("UPDATE agent_memories SET confidence = 0.5 WHERE confidence IS NULL"))
+
+        if "campaign_context_items" in table_columns or "campaign_context_items" in inspector.get_table_names():
+            connection.execute(text("UPDATE campaign_context_items SET details = '{}' WHERE details IS NULL"))
 
     backfill_merchant_slugs()
 

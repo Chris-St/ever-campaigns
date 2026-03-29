@@ -24,7 +24,10 @@ from app.models.entities import (
     Proposal,
     Product,
 )
+from app.services.context_ingestion import build_context_seed_summary
 from app.services.openclaw_runtime import launch_openclaw_agent, stop_openclaw_agent
+from app.services.memory import build_memory_summary
+from app.services.model_competition import normalize_competition_config
 from app.services.proposals import (
     build_proposal_stats,
     create_proposal_from_event,
@@ -371,6 +374,7 @@ def build_default_listener_config(campaign: Campaign) -> dict[str, Any]:
             "auto_post_confidence_threshold": 70,
         },
         "surfaces": [],
+        "competition": normalize_competition_config(None),
     }
 
 
@@ -416,6 +420,7 @@ def normalize_listener_config(config: dict[str, Any] | None) -> dict[str, Any]:
         }
         normalized_surfaces.append(merge_dicts(default_surface, surface))
     merged["surfaces"] = normalized_surfaces
+    merged["competition"] = normalize_competition_config(merged.get("competition"))
     return merged
 
 
@@ -443,6 +448,7 @@ def build_default_listener_config_for_values() -> dict[str, Any]:
             "auto_post_confidence_threshold": 70,
         },
         "surfaces": [],
+        "competition": normalize_competition_config(None),
     }
 
 
@@ -603,6 +609,8 @@ def normalize_agent_event_payload(campaign: Campaign, payload: dict[str, Any]) -
         "product_id": payload.get("product_id"),
         "referral_url": referral_url,
         "response_text": payload.get("response_text"),
+        "model_provider": payload.get("model_provider"),
+        "model_name": payload.get("model_name"),
         "tokens_used": int(payload.get("tokens_used", 0) or 0),
         "compute_cost_usd": float(payload.get("compute_cost_usd", 0.0) or 0.0),
         "expected_impact": payload.get("expected_impact")
@@ -621,6 +629,7 @@ def normalize_agent_event_payload(campaign: Campaign, payload: dict[str, Any]) -
             "action_taken": payload.get("action_taken"),
             "channels_used": payload.get("channels_used", []),
             "total_actions": payload.get("total_actions"),
+            "competition_score": payload.get("competition_score"),
             "campaign_status": campaign.status,
         },
     }
@@ -649,6 +658,8 @@ def persist_agent_event(
             product_id=normalized["product_id"],
             referral_url=normalized["referral_url"],
             response_text=normalized["response_text"],
+            model_provider=normalized["model_provider"],
+            model_name=normalized["model_name"],
             tokens_used=normalized["tokens_used"],
             compute_cost_usd=normalized["compute_cost_usd"],
             expected_impact=normalized["expected_impact"],
@@ -670,6 +681,8 @@ def persist_agent_event(
     event.product_id = normalized["product_id"]
     event.referral_url = normalized["referral_url"]
     event.response_text = normalized["response_text"]
+    event.model_provider = normalized["model_provider"]
+    event.model_name = normalized["model_name"]
     event.tokens_used = normalized["tokens_used"]
     event.compute_cost_usd = normalized["compute_cost_usd"]
     event.expected_impact = normalized["expected_impact"]
@@ -959,13 +972,16 @@ def parse_source_channel(payload: dict[str, Any]) -> str:
     return payload["surface"]
 
 
-def build_agent_config(campaign: Campaign) -> dict[str, Any]:
+def build_agent_config(db: Session, campaign: Campaign) -> dict[str, Any]:
     ensure_listener_defaults(campaign)
     api_key = ensure_campaign_api_key(campaign)
     profile = campaign.brand_voice_profile
     context = campaign.brand_context_profile
     safeguards = campaign.listener_config.get("safeguards", {})
     live_status = effective_listener_status(campaign)
+    memory = build_memory_summary(db, campaign)
+    seeded_context_summary, seeded_context_items = build_context_seed_summary(db, campaign.id)
+    competition = normalize_competition_config(campaign.listener_config.get("competition"))
     products = []
     for product in get_products_for_campaign(campaign):
         attributes = product.attributes if isinstance(product.attributes, dict) else {}
@@ -1012,6 +1028,22 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
             "remaining": budget_remaining(campaign),
             "currency": "USD",
         },
+        "objective": {
+            "primary_goal": "Sell the active catalog while keeping attributed sales above the cost of compute.",
+            "optimization_equation": "sales > compute_cost",
+            "budget_limit": campaign.budget_monthly,
+            "operating_principle": (
+                "Objective-first. The agent chooses tactics, surfaces, and sequencing based on expected "
+                "return on compute, not a fixed channel plan."
+            ),
+            "tactical_freedom": [
+                "Find direct buyer-intent conversations",
+                "Identify creator or editorial outreach opportunities",
+                "Spot search and content gaps worth filling",
+                "Recommend the lowest-cost path to revenue",
+            ],
+        },
+        "memory": memory,
         "reporting": {
             "events_endpoint": f"{settings.public_api_url}/api/campaigns/{campaign.id}/events",
             "api_key": api_key,
@@ -1034,6 +1066,13 @@ def build_agent_config(campaign: Campaign) -> dict[str, Any]:
             "objection_handling": context.get("objection_handling", []),
             "prohibited_claims": context.get("prohibited_claims", []),
             "additional_context": context.get("additional_context", ""),
+            "seeded_context_summary": seeded_context_summary,
+            "seeded_context_items": seeded_context_items,
+        },
+        "competition": {
+            "enabled": competition.get("enabled", False),
+            "mode": competition.get("mode", "single_lane"),
+            "lanes": competition.get("lanes", []),
         },
     }
 
@@ -2002,6 +2041,21 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             "roc": 0.0,
         }
     )
+    model_breakdown: dict[tuple[str, str], dict[str, float | int | str]] = defaultdict(
+        lambda: {
+            "provider": "heuristic",
+            "model": "objective-baseline",
+            "label": "Heuristic baseline",
+            "proposals": 0,
+            "approved": 0,
+            "executed": 0,
+            "conversions": 0,
+            "revenue": 0.0,
+            "compute_cost": 0.0,
+            "return_on_compute": 0.0,
+        }
+    )
+    proposal_lookup = {proposal.id: proposal for proposal in proposals}
 
     for event in action_events:
         surface = event.surface or "other"
@@ -2030,6 +2084,14 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
                 product_row["responses_sent"] += 1
             product_row["compute_cost"] += event.compute_cost_usd
 
+        provider = event.model_provider or "heuristic"
+        model_name = event.model_name or "objective-baseline"
+        model_row = model_breakdown[(provider, model_name)]
+        model_row["provider"] = provider
+        model_row["model"] = model_name
+        model_row["label"] = f"{provider}:{model_name}"
+        model_row["compute_cost"] += event.compute_cost_usd
+
     for proposal in proposals:
         surface = proposal.surface or "other"
         surface_row = surface_stats[surface]
@@ -2056,6 +2118,19 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
             if proposal.approved_at is not None:
                 product_row["responses_sent"] += 1
             product_row["compute_cost"] += proposal.compute_cost_usd
+
+        provider = proposal.model_provider or "heuristic"
+        model_name = proposal.model_name or "objective-baseline"
+        model_row = model_breakdown[(provider, model_name)]
+        model_row["provider"] = provider
+        model_row["model"] = model_name
+        model_row["label"] = f"{provider}:{model_name}"
+        model_row["proposals"] += 1
+        if proposal.approved_at is not None:
+            model_row["approved"] += 1
+        if proposal.executed_at is not None:
+            model_row["executed"] += 1
+        model_row["compute_cost"] += proposal.compute_cost_usd
 
     for click in clicks:
         surface = click.surface or "other"
@@ -2088,6 +2163,17 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         product_row["surface"] = surface
         product_row["conversions"] += 1
         product_row["revenue"] += conversion.order_value
+        if conversion.click and conversion.click.proposal_id:
+            proposal = proposal_lookup.get(conversion.click.proposal_id)
+            if proposal is not None:
+                provider = proposal.model_provider or "heuristic"
+                model_name = proposal.model_name or "objective-baseline"
+                model_row = model_breakdown[(provider, model_name)]
+                model_row["provider"] = provider
+                model_row["model"] = model_name
+                model_row["label"] = f"{provider}:{model_name}"
+                model_row["conversions"] += 1
+                model_row["revenue"] += conversion.order_value
 
     for stats in surface_stats.values():
         stats["revenue"] = round(float(stats["revenue"]), 2)
@@ -2111,6 +2197,15 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         row["revenue"] = round(float(row["revenue"]), 2)
         row["compute_cost"] = round(float(row["compute_cost"]), 2)
         row["roc"] = (
+            round(float(row["revenue"]) / float(row["compute_cost"]), 2)
+            if float(row["compute_cost"])
+            else 0.0
+        )
+
+    for row in model_breakdown.values():
+        row["revenue"] = round(float(row["revenue"]), 2)
+        row["compute_cost"] = round(float(row["compute_cost"]), 2)
+        row["return_on_compute"] = (
             round(float(row["revenue"]) / float(row["compute_cost"]), 2)
             if float(row["compute_cost"])
             else 0.0
@@ -2219,6 +2314,15 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         "channel_breakdown": sorted(
             channel_breakdown.values(),
             key=lambda item: (float(item["return_on_compute"]), float(item["revenue"]), int(item["actions"])),
+            reverse=True,
+        ),
+        "model_breakdown": sorted(
+            model_breakdown.values(),
+            key=lambda item: (
+                float(item["return_on_compute"]),
+                float(item["revenue"]),
+                int(item["proposals"]),
+            ),
             reverse=True,
         ),
         "strategy_feed": [

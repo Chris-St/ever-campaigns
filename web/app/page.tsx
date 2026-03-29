@@ -40,11 +40,11 @@ export default function Home() {
               <div className="space-y-6">
                 <p className="eyebrow">Autonomous commerce</p>
                 <h1 className="max-w-4xl font-display text-5xl tracking-tight text-white sm:text-7xl">
-                  Give an autonomous agent a budget. Tell it to sell.
+                  Give an agent context, a budget, and one job: sell.
                 </h1>
                 <p className="max-w-2xl text-lg leading-9 text-slate-300">
-                  Ever gives an autonomous agent your catalog, your brand identity, and a compute
-                  budget. It decides the channels and tactics. You watch Return on Compute.
+                  Upload the brand brief. Speak extra context. Fund the compute budget. Ever lets the
+                  internet and the models decide the tactics, then measures Return on Compute.
                 </p>
                 <div className="flex flex-wrap gap-3">
                   <Link
@@ -63,11 +63,11 @@ export default function Home() {
               </div>
 
               <div className="mt-10 grid gap-4 sm:grid-cols-3">
-                {[
-                  { value: "1", label: "agent with full tactical freedom" },
-                  { value: "24/7", label: "autonomous action and reporting loop" },
-                  { value: "RoC", label: "single operating metric that matters" },
-                ].map((item) => (
+                  {[
+                    { value: "Files", label: "seeded context for the agent brain" },
+                    { value: "Voice", label: "rapid operator briefs turned into context" },
+                    { value: "RoC", label: "the single operating metric that matters" },
+                  ].map((item) => (
                   <div key={item.label} className="rounded-[1.7rem] border border-white/8 bg-white/4 p-5">
                     <p className="font-display text-4xl text-white">{item.value}</p>
                     <p className="mt-2 text-sm leading-7 text-slate-400">{item.label}</p>
@@ -134,18 +134,18 @@ export default function Home() {
             {[
               {
                 step: "01",
-                title: "Connect your store",
-                body: "Paste a URL, let Ever crawl the catalog, and confirm the product truth your agent will use.",
+                title: "Connect one product set",
+                body: "Paste a store URL and let Ever pick a focused starting catalog so the first experiment stays sharp.",
               },
               {
                 step: "02",
-                title: "Define budget and brand",
-                body: "Set the compute budget, review the brand voice, and choose how aggressively the agent should operate.",
+                title: "Dump context fast",
+                body: "Upload founder docs, notes, and FAQs, or just speak your context and let Ever turn it into agent memory.",
               },
               {
                 step: "03",
-                title: "Watch the agent work",
-                body: "Track actions, channel choices, conversions, revenue, and Return on Compute in one live dashboard.",
+                title: "Fund and launch",
+                body: "Set the budget, pay, and let the models compete on one objective: sales greater than compute cost.",
               },
             ].map((item) => (
               <article key={item.step} className="panel p-6">

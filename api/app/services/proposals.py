@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
 from app.models.entities import AgentEvent, Campaign, Click, Conversion, Product, Proposal
+from app.services.memory import record_memory
 
 
 def utcnow() -> datetime:
@@ -76,6 +77,8 @@ def create_audit_event(
         product_id=proposal.product_id if proposal else None,
         referral_url=proposal.referral_url if proposal else None,
         response_text=proposal.proposed_response if proposal else None,
+        model_provider=proposal.model_provider if proposal else None,
+        model_name=proposal.model_name if proposal else None,
         tokens_used=0,
         compute_cost_usd=0.0,
         expected_impact="high"
@@ -86,6 +89,7 @@ def create_audit_event(
         details={
             "proposal_id": proposal.id if proposal else None,
             "proposal_status": proposal.status if proposal else None,
+            "competition_score": proposal.competition_score if proposal else None,
         },
         created_at=utcnow(),
     )
@@ -140,6 +144,9 @@ def create_proposal_from_event(
         rationale=payload.get("rationale"),
         execution_instructions=payload.get("execution_instructions"),
         status="proposed",
+        model_provider=payload.get("model_provider"),
+        model_name=payload.get("model_name"),
+        competition_score=float(payload.get("competition_score", 0.0) or 0.0),
         tokens_used=int(payload.get("tokens_used", 0) or 0),
         compute_cost_usd=float(payload.get("compute_cost_usd", 0.0) or 0.0),
         created_at=created_at,
@@ -247,6 +254,9 @@ def build_proposal_record(db: Session, proposal: Proposal) -> dict[str, Any]:
         "outcome": proposal.outcome,
         "outcome_notes": proposal.outcome_notes,
         "outcome_recorded_at": proposal.outcome_recorded_at.isoformat() if proposal.outcome_recorded_at else None,
+        "model_provider": proposal.model_provider,
+        "model_name": proposal.model_name,
+        "competition_score": round(proposal.competition_score or 0.0, 2),
         "tokens_used": proposal.tokens_used,
         "compute_cost_usd": round(proposal.compute_cost_usd, 4),
         "created_at": proposal.created_at.isoformat(),
@@ -301,6 +311,19 @@ def approve_proposal(db: Session, campaign: Campaign, proposal_id: str) -> dict[
         raise ValueError("Only proposed items can be approved")
     proposal.status = "approved"
     proposal.approved_at = utcnow()
+    product_name = proposal.product.name if proposal.product else "the product"
+    record_memory(
+        db,
+        campaign,
+        kind="approval",
+        title="Operator approved a tactic",
+        summary=(
+            f"The operator approved a {proposal.action_type} on {proposal.surface or 'the web'} "
+            f"for {product_name}, signaling that the fit and framing looked credible."
+        ),
+        confidence=0.72,
+        proposal=proposal,
+    )
     create_audit_event(
         db,
         campaign.id,
@@ -325,6 +348,21 @@ def reject_proposal(
     proposal.status = "rejected"
     proposal.rejected_at = utcnow()
     proposal.rejection_reason = reason.strip() if reason else None
+    product_name = proposal.product.name if proposal.product else "the product"
+    feedback = proposal.rejection_reason or "The operator did not trust the fit or framing."
+    record_memory(
+        db,
+        campaign,
+        kind="rejection",
+        title="Operator rejected a tactic",
+        summary=(
+            f"A proposed {proposal.action_type} on {proposal.surface or 'the web'} for {product_name} "
+            f"was rejected. Feedback: {feedback}"
+        ),
+        confidence=0.85,
+        proposal=proposal,
+        details={"reason": proposal.rejection_reason},
+    )
     create_audit_event(
         db,
         campaign.id,
@@ -346,7 +384,25 @@ def edit_proposal(
     proposal = get_proposal(db, campaign.id, proposal_id)
     if proposal.status != "proposed":
         raise ValueError("Only proposed items can be edited")
+    original = proposal.proposed_response
     proposal.proposed_response = proposed_response.strip()
+    if proposal.proposed_response != original:
+        record_memory(
+            db,
+            campaign,
+            kind="operator_feedback",
+            title="Operator edited proposal copy",
+            summary=(
+                f"The operator rewrote a {proposal.action_type} on {proposal.surface or 'the web'} "
+                "before approval. Prefer the edited tone and framing over the original draft."
+            ),
+            confidence=0.66,
+            proposal=proposal,
+            details={
+                "original_response": original,
+                "edited_response": proposal.proposed_response,
+            },
+        )
     create_audit_event(
         db,
         campaign.id,
@@ -371,6 +427,20 @@ def mark_proposal_executed(
     proposal.status = "executed_manually"
     proposal.executed_at = utcnow()
     proposal.execution_notes = notes.strip() if notes else None
+    product_name = proposal.product.name if proposal.product else "the product"
+    record_memory(
+        db,
+        campaign,
+        kind="execution",
+        title="Approved tactic was executed",
+        summary=(
+            f"The operator manually executed a {proposal.action_type} on {proposal.surface or 'the web'} "
+            f"for {product_name}. This tactic was strong enough to move from idea to action."
+        ),
+        confidence=0.74,
+        proposal=proposal,
+        details={"execution_notes": proposal.execution_notes},
+    )
     create_audit_event(
         db,
         campaign.id,
@@ -397,6 +467,23 @@ def record_proposal_outcome(
     proposal.outcome = outcome.strip()
     proposal.outcome_notes = notes.strip() if notes else None
     proposal.outcome_recorded_at = utcnow()
+    product_name = proposal.product.name if proposal.product else "the product"
+    positive_outcomes = {"clicked", "converted"}
+    memory_kind = "positive_outcome" if proposal.outcome in positive_outcomes else proposal.outcome or "outcome"
+    record_memory(
+        db,
+        campaign,
+        kind=memory_kind,
+        title="Operator recorded an outcome",
+        summary=(
+            f"A manually executed {proposal.action_type} on {proposal.surface or 'the web'} for {product_name} "
+            f"ended with outcome '{proposal.outcome}'."
+            f"{f' Notes: {proposal.outcome_notes}' if proposal.outcome_notes else ''}"
+        ),
+        confidence=0.9 if proposal.outcome in positive_outcomes else 0.8,
+        proposal=proposal,
+        details={"outcome": proposal.outcome, "notes": proposal.outcome_notes},
+    )
     create_audit_event(
         db,
         campaign.id,

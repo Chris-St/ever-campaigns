@@ -363,6 +363,16 @@ export function ProposalsQueueClient() {
                       <span className="rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
                         {proposal.action_type}
                       </span>
+                      {proposal.model_provider ? (
+                        <span className="rounded-full border border-fuchsia-400/20 bg-fuchsia-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-fuchsia-100">
+                          {proposal.model_provider} {proposal.model_name ?? ""}
+                        </span>
+                      ) : null}
+                      {proposal.competition_score ? (
+                        <span className="rounded-full border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-blue-100">
+                          Score {Math.round(proposal.competition_score)}
+                        </span>
+                      ) : null}
                       <span className={`rounded-full border px-3 py-2 text-xs uppercase tracking-[0.2em] ${confidenceTone(proposal.attribution_confidence)}`}>
                         {proposal.attribution_confidence}
                       </span>

@@ -110,6 +110,8 @@ class Campaign(Base):
     intent_signals: Mapped[list["IntentSignal"]] = relationship(back_populates="campaign")
     agent_responses: Mapped[list["AgentResponse"]] = relationship(back_populates="campaign")
     agent_events: Mapped[list["AgentEvent"]] = relationship(back_populates="campaign")
+    agent_memories: Mapped[list["AgentMemory"]] = relationship(back_populates="campaign")
+    context_items: Mapped[list["CampaignContextItem"]] = relationship(back_populates="campaign")
 
 
 class Query(Base):
@@ -284,6 +286,9 @@ class Proposal(Base):
     outcome: Mapped[str | None] = mapped_column(String, nullable=True)
     outcome_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    model_provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    competition_score: Mapped[float] = mapped_column(Float, default=0.0)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
     compute_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -291,6 +296,51 @@ class Proposal(Base):
     campaign: Mapped[Campaign] = relationship(back_populates="proposals")
     product: Mapped[Product | None] = relationship()
     clicks: Mapped[list[Click]] = relationship(back_populates="proposal")
+    memories: Mapped[list["AgentMemory"]] = relationship(back_populates="proposal")
+
+
+class CampaignContextItem(Base):
+    __tablename__ = "campaign_context_items"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_id)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    kind: Mapped[str] = mapped_column(String, default="note")
+    title: Mapped[str] = mapped_column(String)
+    source_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_text: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    campaign: Mapped[Campaign] = relationship(back_populates="context_items")
+
+
+class AgentMemory(Base):
+    __tablename__ = "agent_memories"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_id)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    proposal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("proposals.id"),
+        index=True,
+        nullable=True,
+    )
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), index=True, nullable=True)
+    kind: Mapped[str] = mapped_column(String, default="lesson")
+    title: Mapped[str] = mapped_column(String)
+    summary: Mapped[str] = mapped_column(Text)
+    surface: Mapped[str | None] = mapped_column(String, nullable=True)
+    action_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    campaign: Mapped[Campaign] = relationship(back_populates="agent_memories")
+    proposal: Mapped[Proposal | None] = relationship(back_populates="memories")
+    product: Mapped[Product | None] = relationship()
 
 
 class AgentEvent(Base):
@@ -309,6 +359,8 @@ class AgentEvent(Base):
     product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id"), index=True, nullable=True)
     referral_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String, nullable=True)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
     compute_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     expected_impact: Mapped[str | None] = mapped_column(String, nullable=True)

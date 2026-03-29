@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     public_web_url: str = "http://localhost:3000"
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-latest"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5"
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     reddit_client_id: str | None = None

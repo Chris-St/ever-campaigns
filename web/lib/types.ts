@@ -120,6 +120,23 @@ export interface BrandContextProfile {
   additional_context: string;
 }
 
+export interface CompetitionLaneConfig {
+  id: string;
+  provider: string;
+  model: string;
+  label: string;
+  available: boolean;
+  enabled: boolean;
+  role: string;
+}
+
+export interface CompetitionConfig {
+  enabled: boolean;
+  mode: "single_lane" | "shadow" | "best_of_n";
+  max_candidates_per_cycle: number;
+  lanes: CompetitionLaneConfig[];
+}
+
 export interface ListenerThresholds {
   composite_min: number;
   receptivity_min: number;
@@ -158,6 +175,7 @@ export interface ListenerConfig {
   thresholds: ListenerThresholds;
   safeguards: ListenerSafeguards;
   surfaces: ListenerSurfaceConfig[];
+  competition: CompetitionConfig;
 }
 
 export interface ListenerStatus {
@@ -274,6 +292,19 @@ export interface ListenerStrategyEntry {
   relative_time: string;
 }
 
+export interface ListenerModelBreakdown {
+  provider: string;
+  model: string;
+  label: string;
+  proposals: number;
+  approved: number;
+  executed: number;
+  conversions: number;
+  revenue: number;
+  compute_cost: number;
+  return_on_compute: number;
+}
+
 export interface ListenerAnalytics {
   period: string;
   actions_reported: number;
@@ -299,6 +330,7 @@ export interface ListenerAnalytics {
   top_subreddits: ListenerCountBreakdown[];
   intent_score_distribution: ListenerCountBreakdown[];
   channel_breakdown: ListenerChannelBreakdown[];
+  model_breakdown: ListenerModelBreakdown[];
   strategy_feed: ListenerStrategyEntry[];
   daily: ListenerAnalyticsPoint[];
   daily_series: ListenerAnalyticsPoint[];
@@ -381,6 +413,8 @@ export interface ActivityEntry {
   source_url?: string | null;
   proposal_id?: string | null;
   proposal_status?: string | null;
+  model_provider?: string | null;
+  model_name?: string | null;
 }
 
 export interface CampaignAgentKeyResponse {
@@ -450,6 +484,9 @@ export interface ProposalRecord {
   outcome?: string | null;
   outcome_notes?: string | null;
   outcome_recorded_at?: string | null;
+  model_provider?: string | null;
+  model_name?: string | null;
+  competition_score: number;
   tokens_used: number;
   compute_cost_usd: number;
   created_at: string;
@@ -458,4 +495,18 @@ export interface ProposalRecord {
   conversions: number;
   revenue: number;
   attribution_confidence: "confirmed" | "estimated" | "unattributed";
+}
+
+export interface ContextItemRecord {
+  id: string;
+  campaign_id: string;
+  kind: string;
+  title: string;
+  source_name?: string | null;
+  mime_type?: string | null;
+  content_text: string;
+  summary: string;
+  storage_path?: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
 }

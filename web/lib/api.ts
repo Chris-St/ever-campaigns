@@ -10,6 +10,7 @@ export async function apiRequest<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const { token, headers, body, ...rest } = options;
+  const isFormData = body instanceof FormData;
   const serializedBody =
     body == null
       ? undefined
@@ -25,7 +26,7 @@ export async function apiRequest<T>(
   const response = await fetch(`${API_URL}${path}`, {
     ...rest,
     headers: {
-      "Content-Type": "application/json",
+      ...(!isFormData ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },

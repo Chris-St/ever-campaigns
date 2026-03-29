@@ -146,6 +146,23 @@ class BrandContextProfile(BaseModel):
     additional_context: str = ""
 
 
+class CompetitionLaneConfig(BaseModel):
+    id: str
+    provider: str
+    model: str
+    label: str
+    available: bool = True
+    enabled: bool = True
+    role: str = "planner"
+
+
+class CompetitionConfig(BaseModel):
+    enabled: bool = False
+    mode: Literal["single_lane", "shadow", "best_of_n"] = "single_lane"
+    max_candidates_per_cycle: int = 3
+    lanes: list[CompetitionLaneConfig] = Field(default_factory=list)
+
+
 class ListenerThresholds(BaseModel):
     composite_min: int = 70
     receptivity_min: int = 60
@@ -184,6 +201,7 @@ class ListenerConfig(BaseModel):
     thresholds: ListenerThresholds = Field(default_factory=ListenerThresholds)
     safeguards: ListenerSafeguards = Field(default_factory=ListenerSafeguards)
     surfaces: list[ListenerSurfaceConfig] = Field(default_factory=list)
+    competition: CompetitionConfig = Field(default_factory=CompetitionConfig)
 
 
 class ListenerStatus(BaseModel):
@@ -310,6 +328,19 @@ class ListenerStrategyEntry(BaseModel):
     relative_time: str
 
 
+class ListenerModelBreakdown(BaseModel):
+    provider: str
+    model: str
+    label: str
+    proposals: int
+    approved: int
+    executed: int
+    conversions: int
+    revenue: float
+    compute_cost: float
+    return_on_compute: float
+
+
 class ListenerAnalytics(BaseModel):
     period: str
     actions_reported: int = 0
@@ -335,6 +366,7 @@ class ListenerAnalytics(BaseModel):
     top_subreddits: list[ListenerCountBreakdown] = Field(default_factory=list)
     intent_score_distribution: list[ListenerCountBreakdown] = Field(default_factory=list)
     channel_breakdown: list[ListenerChannelBreakdown] = Field(default_factory=list)
+    model_breakdown: list[ListenerModelBreakdown] = Field(default_factory=list)
     strategy_feed: list[ListenerStrategyEntry] = Field(default_factory=list)
     daily: list[ListenerAnalyticsPoint] = Field(default_factory=list)
     daily_series: list[ListenerAnalyticsPoint] = Field(default_factory=list)
@@ -378,6 +410,9 @@ class AgentEventRequest(BaseModel):
     expected_impact: str | None = None
     channels_used: list[str] = Field(default_factory=list)
     total_actions: int | None = None
+    model_provider: str | None = None
+    model_name: str | None = None
+    competition_score: float | None = None
     timestamp: str
 
 
@@ -430,6 +465,8 @@ class AgentContextConfig(BaseModel):
     objection_handling: list[str] = Field(default_factory=list)
     prohibited_claims: list[str] = Field(default_factory=list)
     additional_context: str = ""
+    seeded_context_summary: str = ""
+    seeded_context_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentBudgetConfig(BaseModel):
@@ -439,9 +476,45 @@ class AgentBudgetConfig(BaseModel):
     currency: str
 
 
+class AgentObjectiveConfig(BaseModel):
+    primary_goal: str
+    optimization_equation: str = "sales > compute_cost"
+    budget_limit: float
+    operating_principle: str
+    tactical_freedom: list[str] = Field(default_factory=list)
+
+
+class AgentMemoryItem(BaseModel):
+    id: str
+    kind: str
+    title: str
+    summary: str
+    surface: str | None = None
+    action_type: str | None = None
+    product_id: str | None = None
+    confidence: float = 0.0
+    created_at: str
+    relative_time: str
+
+
+class AgentMemoryConfig(BaseModel):
+    enabled: bool = True
+    summary: str = ""
+    winning_patterns: list[str] = Field(default_factory=list)
+    caution_patterns: list[str] = Field(default_factory=list)
+    operator_feedback: list[str] = Field(default_factory=list)
+    recent_items: list[AgentMemoryItem] = Field(default_factory=list)
+
+
 class AgentReportingConfig(BaseModel):
     events_endpoint: str
     api_key: str
+
+
+class AgentCompetitionConfig(BaseModel):
+    enabled: bool = False
+    mode: Literal["single_lane", "shadow", "best_of_n"] = "single_lane"
+    lanes: list[CompetitionLaneConfig] = Field(default_factory=list)
 
 
 class AgentConfigResponse(BaseModel):
@@ -454,9 +527,12 @@ class AgentConfigResponse(BaseModel):
     brand: AgentBrandConfig
     products: list[AgentProductConfig] = Field(default_factory=list)
     budget: AgentBudgetConfig
+    objective: AgentObjectiveConfig
+    memory: AgentMemoryConfig
     reporting: AgentReportingConfig
     constraints: AgentConstraintsConfig
     context: AgentContextConfig
+    competition: AgentCompetitionConfig = Field(default_factory=AgentCompetitionConfig)
 
 
 class ProposalStatsSummary(BaseModel):
@@ -574,6 +650,8 @@ class ActivityEntry(BaseModel):
     source_url: str | None = None
     proposal_id: str | None = None
     proposal_status: str | None = None
+    model_provider: str | None = None
+    model_name: str | None = None
 
 
 class BillingCheckoutRequest(BaseModel):
@@ -626,6 +704,9 @@ class ProposalRecord(SchemaModel):
     outcome: str | None = None
     outcome_notes: str | None = None
     outcome_recorded_at: str | None = None
+    model_provider: str | None = None
+    model_name: str | None = None
+    competition_score: float = 0.0
     tokens_used: int = 0
     compute_cost_usd: float = 0.0
     created_at: str
@@ -651,6 +732,26 @@ class ProposalExecutedRequest(BaseModel):
 class ProposalOutcomeRequest(BaseModel):
     outcome: str
     notes: str | None = None
+
+
+class ContextItemRecord(SchemaModel):
+    id: str
+    campaign_id: str
+    kind: str
+    title: str
+    source_name: str | None = None
+    mime_type: str | None = None
+    content_text: str
+    summary: str
+    storage_path: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class ContextNoteRequest(BaseModel):
+    title: str
+    content: str
+    kind: Literal["note", "voice_note", "brief"] = "note"
 
 
 class SearchProductsRequest(BaseModel):

@@ -399,6 +399,8 @@ def build_activity_feed(
                     "source_url": agent_event.source_url,
                     "proposal_id": agent_event.details.get("proposal_id") if agent_event.details else None,
                     "proposal_status": agent_event.details.get("proposal_status") if agent_event.details else None,
+                    "model_provider": agent_event.model_provider,
+                    "model_name": agent_event.model_name,
                 }
             )
 

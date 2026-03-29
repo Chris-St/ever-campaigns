@@ -9,6 +9,7 @@ from app.api.agent_runtime import router as agent_runtime_router
 from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.campaigns import router as campaigns_router
+from app.api.context import router as context_router
 from app.api.feeds import router as feeds_router
 from app.api.listener import agent_router as listener_agent_router
 from app.api.listener import router as listener_router
@@ -55,6 +56,7 @@ def root() -> dict[str, str]:
 app.include_router(auth_router)
 app.include_router(onboarding_router)
 app.include_router(campaigns_router)
+app.include_router(context_router)
 app.include_router(proposals_router)
 app.include_router(products_router)
 app.include_router(billing_router)

@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db
-from app.models.entities import AgentEvent, AgentResponse, Click, Conversion, Match, Product, Proposal
+from app.models.entities import AgentEvent, AgentResponse, Campaign, Click, Conversion, Match, Product, Proposal
 from app.schemas.contracts import ShopifyOrderWebhook
+from app.services.memory import remember_conversion
 
 
 router = APIRouter(tags=["tracking"])
@@ -143,5 +144,12 @@ def shopify_order_webhook(
         channel=click.channel if click else "mcp",
     )
     db.add(conversion)
+    db.flush()
+    campaign = None
+    if payload.campaign_id:
+        campaign = db.scalar(select(Campaign).where(Campaign.id == payload.campaign_id))
+    linked_proposal = click.proposal if click and click.proposal else None
+    if campaign is not None:
+        remember_conversion(db, campaign, conversion=conversion, click=click, proposal=linked_proposal)
     db.commit()
     return {"status": "recorded"}

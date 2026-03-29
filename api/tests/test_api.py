@@ -155,6 +155,27 @@ def test_full_flow(monkeypatch) -> None:
     assert updated_listener.status_code == 200
     assert updated_listener.json()["config"]["listener_mode"] == "live"
     assert updated_listener.json()["brand_context_profile"]["positioning"].startswith("Bia makes premium")
+    assert "competition" in updated_listener.json()["config"]
+
+    context_note = client.post(
+        f"/campaigns/{campaign_id}/context/notes",
+        headers=headers,
+        json={
+            "title": "Founder brief",
+            "content": "Lead with premium fit, comfort, and made-in-Canada credibility.",
+            "kind": "brief",
+        },
+    )
+    assert context_note.status_code == 200
+    assert context_note.json()["kind"] == "brief"
+
+    context_upload = client.post(
+        f"/campaigns/{campaign_id}/context/upload",
+        headers=headers,
+        files={"file": ("brief.txt", b"Bia context file\nDo not use discount language.", "text/plain")},
+    )
+    assert context_upload.status_code == 200
+    assert context_upload.json()["kind"] == "file"
 
     started_listener = client.post(f"/campaigns/{campaign_id}/listener/start", headers=headers)
     assert started_listener.status_code == 200
@@ -218,14 +239,20 @@ def test_full_flow(monkeypatch) -> None:
     assert agent_config_json["operating_mode"] == "propose_only"
     assert agent_config_json["manual_execution_required"] is True
     assert agent_config_json["approval_required"] is True
+    assert agent_config_json["objective"]["optimization_equation"] == "sales > compute_cost"
+    assert "Objective-first" in agent_config_json["objective"]["operating_principle"]
+    assert agent_config_json["memory"]["enabled"] is True
+    assert "Memory is active" in agent_config_json["memory"]["summary"]
     assert agent_config_json["brand"]["story"]
     assert "surfaces" not in agent_config_json
     assert "rules" not in agent_config_json
+    assert agent_config_json["competition"]["lanes"]
     assert agent_config_json["constraints"]["always_disclose_ai"] is True
     assert agent_config_json["constraints"]["max_actions_per_day"] >= 1
     assert agent_config_json["budget"]["remaining"] > 0
     assert agent_config_json["context"]["positioning"].startswith("Bia makes premium")
     assert "Made in Canada" in agent_config_json["context"]["proof_points"]
+    assert len(agent_config_json["context"]["seeded_context_items"]) >= 2
     assert "attributes" in agent_config_json["products"][0]
     assert len(agent_config_json["products"][0]["key_selling_points"]) >= 1
     product_id = agent_config_json["products"][0]["id"]
@@ -253,12 +280,15 @@ def test_full_flow(monkeypatch) -> None:
             "action_type": "reply",
             "proposed_response": "If the goal is comfort during movement, breathable and stay-put matters most. Bia's High Movement Thong is built for running and dries fast. I'm an AI agent for Bia (via Ever).",
             "rationale": "The person is explicitly asking for a strong-fit recommendation and the product is purpose-built for this use case.",
-                "execution_instructions": "Open the Reddit thread, click reply, paste the response, and include the tracked link if appropriate.",
-                "product_id": product_id,
-                "tokens_used": 620,
-                "compute_cost_usd": 4.6,
-                "timestamp": research_timestamp,
-            },
+            "execution_instructions": "Open the Reddit thread, click reply, paste the response, and include the tracked link if appropriate.",
+            "product_id": product_id,
+            "model_provider": "anthropic",
+            "model_name": "claude-test",
+            "competition_score": 91,
+            "tokens_used": 620,
+            "compute_cost_usd": 4.6,
+            "timestamp": research_timestamp,
+        },
         )
     assert proposal_event.status_code == 200
     proposal_event_json = proposal_event.json()
@@ -275,6 +305,8 @@ def test_full_flow(monkeypatch) -> None:
     proposals_json = proposals.json()
     assert len(proposals_json) == 1
     assert proposals_json[0]["status"] == "proposed"
+    assert proposals_json[0]["model_provider"] == "anthropic"
+    assert proposals_json[0]["competition_score"] == 91
     assert f"cid={campaign_id}" in proposals_json[0]["referral_url"]
     assert f"pid={proposal_id}" in proposals_json[0]["referral_url"]
 
@@ -361,6 +393,18 @@ def test_full_flow(monkeypatch) -> None:
     assert outcome.json()["status"] == "outcome_recorded"
     assert outcome.json()["attribution_confidence"] == "confirmed"
 
+    refreshed_agent_config = client.get(
+        f"/api/campaigns/{campaign_id}/agent-config",
+        headers=agent_headers,
+    )
+    assert refreshed_agent_config.status_code == 200
+    refreshed_agent_config_json = refreshed_agent_config.json()
+    assert any(
+        item["kind"] == "conversion_win"
+        for item in refreshed_agent_config_json["memory"]["recent_items"]
+    )
+    assert refreshed_agent_config_json["memory"]["winning_patterns"]
+
     listener_analytics = client.get(
         f"/campaigns/{campaign_id}/listener/analytics?period=30d",
         headers=headers,
@@ -381,6 +425,7 @@ def test_full_flow(monkeypatch) -> None:
     assert any(
         item["surface"] == "reddit" for item in listener_analytics_json["channel_breakdown"]
     )
+    assert any(item["provider"] == "anthropic" for item in listener_analytics_json["model_breakdown"])
     assert any(
         "reddit" in entry["channels_used"] for entry in listener_analytics_json["strategy_feed"]
     )
@@ -393,6 +438,7 @@ def test_full_flow(monkeypatch) -> None:
     assert action_activity.status_code == 200
     assert any(entry["event_type"].startswith("proposal") for entry in action_activity.json())
     assert any(entry["surface"] == "reddit" for entry in action_activity.json())
+    assert any(entry["model_provider"] == "anthropic" for entry in action_activity.json())
 
     review_queue = client.get(f"/campaigns/{campaign_id}/review", headers=headers)
     assert review_queue.status_code == 200
