@@ -386,6 +386,7 @@ class AgentIntentScore(BaseModel):
 
 
 class AgentEventRequest(BaseModel):
+    event_id: str | None = None
     event_type: str
     category: str | None = None
     surface: str | None = None

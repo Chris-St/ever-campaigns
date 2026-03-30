@@ -366,6 +366,8 @@ def build_activity_feed(
             )
     if normalized_filter in ("all", "action", "strategy", "response", "proposal"):
         for agent_event in agent_events:
+            if agent_event.event_type == "metering":
+                continue
             if agent_event.event_type == "strategy_update":
                 event_bucket = "strategy"
             elif agent_event.event_type.startswith("proposal"):

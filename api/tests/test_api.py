@@ -423,6 +423,47 @@ def test_full_flow(monkeypatch) -> None:
     assert strategy_update.status_code == 200
     assert strategy_update.json()["status"] == "recorded"
 
+    metering_event = client.post(
+        f"/api/campaigns/{campaign_id}/events",
+        headers=agent_headers,
+        json={
+            "event_id": "metering:test-session:0-10:openai:gpt-5.4",
+            "event_type": "metering",
+            "category": "metering",
+            "surface": "agent_runtime",
+            "description": "Recorded real provider spend from the external agent runtime.",
+            "model_provider": "openai",
+            "model_name": "gpt-5.4",
+            "tokens_used": 128000,
+            "compute_cost_usd": 8.5,
+            "timestamp": strategy_timestamp,
+        },
+    )
+    assert metering_event.status_code == 200
+    assert metering_event.json()["status"] == "recorded"
+    assert metering_event.json()["budget_remaining"] < 2390
+
+    updated_metering_event = client.post(
+        f"/api/campaigns/{campaign_id}/events",
+        headers=agent_headers,
+        json={
+            "event_id": "metering:test-session:0-10:openai:gpt-5.4",
+            "event_type": "metering",
+            "category": "metering",
+            "surface": "agent_runtime",
+            "description": "Recorded real provider spend from the external agent runtime.",
+            "model_provider": "openai",
+            "model_name": "gpt-5.4",
+            "tokens_used": 140000,
+            "compute_cost_usd": 9.25,
+            "timestamp": strategy_timestamp,
+        },
+    )
+    assert updated_metering_event.status_code == 200
+    assert updated_metering_event.json()["status"] == "recorded"
+    assert updated_metering_event.json()["event_id"] == "metering:test-session:0-10:openai:gpt-5.4"
+    assert updated_metering_event.json()["budget_remaining"] < metering_event.json()["budget_remaining"]
+
     updated_listener_status = client.get(
         f"/campaigns/{campaign_id}/listener/status",
         headers=headers,
@@ -434,6 +475,7 @@ def test_full_flow(monkeypatch) -> None:
     assert updated_listener_status_json["proposals_pending"] == 0
     assert updated_listener_status_json["strategy_updates_today"] >= 1
     assert updated_listener_status_json["active_surface_count"] >= 2
+    assert "agent_runtime" not in updated_listener_status_json["active_surfaces"]
     assert updated_listener_status_json["last_active"] is not None
 
     redirect = client.get(
@@ -498,9 +540,14 @@ def test_full_flow(monkeypatch) -> None:
     )
     assert any(item["provider"] == "anthropic" for item in listener_analytics_json["model_breakdown"])
     assert any(
+        item["provider"] == "openai" and item["compute_cost"] >= 9.25
+        for item in listener_analytics_json["model_breakdown"]
+    )
+    assert any(
         "reddit" in entry["channels_used"] for entry in listener_analytics_json["strategy_feed"]
     )
     assert len(listener_analytics_json["daily_series"]) >= 1
+    assert max(point["compute_cost"] for point in listener_analytics_json["daily_series"]) >= 13.85
 
     action_activity = client.get(
         f"/campaigns/{campaign_id}/activity?limit=20&event_type=proposal",
@@ -510,6 +557,13 @@ def test_full_flow(monkeypatch) -> None:
     assert any(entry["event_type"].startswith("proposal") for entry in action_activity.json())
     assert any(entry["surface"] == "reddit" for entry in action_activity.json())
     assert any(entry["model_provider"] == "anthropic" for entry in action_activity.json())
+
+    full_activity = client.get(
+        f"/campaigns/{campaign_id}/activity?limit=50&event_type=all",
+        headers=headers,
+    )
+    assert full_activity.status_code == 200
+    assert all(entry["event_type"] != "metering" for entry in full_activity.json())
 
     review_queue = client.get(f"/campaigns/{campaign_id}/review", headers=headers)
     assert review_queue.status_code == 200

@@ -554,6 +554,8 @@ def default_event_description(payload: dict[str, Any]) -> str:
     event_type = payload.get("event_type", "action")
     surface = payload.get("surface") or "the web"
     source_content = payload.get("source_content")
+    if event_type == "metering":
+        return payload.get("description") or "Recorded metered provider spend from the external agent runtime."
     if event_type == "strategy_update":
         return payload.get("description") or "Reported a strategy update."
     if event_type == "conversion_attempt":
@@ -571,6 +573,8 @@ def default_event_description(payload: dict[str, Any]) -> str:
 
 def default_event_category(payload: dict[str, Any]) -> str:
     event_type = payload.get("event_type", "action")
+    if event_type == "metering":
+        return "metering"
     if event_type == "strategy_update":
         return "strategy"
     if event_type == "conversion_attempt":
@@ -586,14 +590,14 @@ def default_event_category(payload: dict[str, Any]) -> str:
 
 def normalize_agent_event_payload(campaign: Campaign, payload: dict[str, Any]) -> dict[str, Any]:
     normalized_event_type = payload.get("event_type") or "action"
-    if normalized_event_type not in {"action", "strategy_update", "conversion_attempt"}:
+    if normalized_event_type not in {"action", "strategy_update", "conversion_attempt", "metering"}:
         normalized_event_type = "action"
     surface = payload.get("surface") or "other"
     category = payload.get("category") or default_event_category(payload)
     description = payload.get("description") or default_event_description(payload)
     referral_url = payload.get("referral_url")
     interaction_id = parse_interaction_id(referral_url)
-    event_id = interaction_id or str(uuid4())
+    event_id = payload.get("event_id") or payload.get("id") or interaction_id or str(uuid4())
     return {
         "id": event_id,
         "event_type": normalized_event_type,
@@ -688,6 +692,7 @@ def persist_agent_event(
     event.expected_impact = normalized["expected_impact"]
     event.details = normalized["details"]
     event.created_at = created_at
+    db.flush()
     return event
 
 
@@ -1746,7 +1751,7 @@ def build_listener_status(db: Session, campaign: Campaign, refresh: bool = True)
     )
     active_surfaces = sorted(
         {
-            *(event.surface for event in events_today if event.surface),
+            *(event.surface for event in events_today if event.surface and event.event_type != "metering"),
             *(proposal.surface for proposal in proposals_today if proposal.surface),
         }
     )
@@ -1986,6 +1991,7 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
 
     action_events = [event for event in events if event.event_type == "action"]
     strategy_events = [event for event in events if event.event_type == "strategy_update"]
+    metering_events = [event for event in events if event.event_type == "metering"]
     response_actions = [
         event for event in action_events if event.category in {"engagement", "outreach"}
     ]
@@ -2086,6 +2092,15 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
 
         provider = event.model_provider or "heuristic"
         model_name = event.model_name or "objective-baseline"
+        model_row = model_breakdown[(provider, model_name)]
+        model_row["provider"] = provider
+        model_row["model"] = model_name
+        model_row["label"] = f"{provider}:{model_name}"
+        model_row["compute_cost"] += event.compute_cost_usd
+
+    for event in metering_events:
+        provider = event.model_provider or "external"
+        model_name = event.model_name or "session-log"
         model_row = model_breakdown[(provider, model_name)]
         model_row["provider"] = provider
         model_row["model"] = model_name
@@ -2244,6 +2259,10 @@ def build_listener_analytics(db: Session, campaign: Campaign, period: str = "7d"
         key = ensure_utc(event.created_at).date().isoformat()
         daily_map[key]["date"] = key
         daily_map[key]["strategy_updates"] += 1
+    for event in metering_events:
+        key = ensure_utc(event.created_at).date().isoformat()
+        daily_map[key]["date"] = key
+        daily_map[key]["compute_cost"] += event.compute_cost_usd
     for click in clicks:
         key = ensure_utc(click.created_at).date().isoformat()
         daily_map[key]["date"] = key
