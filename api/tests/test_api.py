@@ -4,17 +4,20 @@ import json
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 
 temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 os.environ["DATABASE_URL"] = f"sqlite:///{temp_db.name}"
 os.environ["STRIPE_SECRET_KEY"] = "sk_test_123"
 os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_123"
+os.environ["SELF_FUNDED_MODE"] = "false"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.db.session import init_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services.context_ingestion import create_text_context_item  # noqa: E402
 from app.services.openclaw_runtime import (  # noqa: E402
     campaign_manifest_path,
     campaign_runtime_config_path,
@@ -57,6 +60,42 @@ def test_full_flow(monkeypatch) -> None:
             },
         },
     )
+    monkeypatch.setattr(
+        "app.api.billing.retrieve_checkout_session",
+        lambda session_id: SimpleNamespace(
+            id=session_id,
+            status="complete",
+            payment_status="paid",
+            customer="cus_test_123",
+            subscription=stripe_subscription_id,
+        ),
+    )
+
+    def fake_create_url_context_item(db, campaign, *, url, title=None, kind="social_profile"):
+        return create_text_context_item(
+            db,
+            campaign,
+            title=title or "Bia Instagram",
+            content=f"Imported {kind} from {url}. Bia posts premium movement imagery and founder-led product education.",
+            kind=kind,
+            source_name=url,
+            details={"platform": "instagram", "url": url},
+        )
+
+    async def fake_create_voice_context_item(db, campaign, upload):
+        return create_text_context_item(
+            db,
+            campaign,
+            title=upload.filename or "Voice note",
+            content="Voice note transcript: lead with premium fit, Canadian manufacturing, and comfort in motion.",
+            kind="voice_note",
+            source_name=upload.filename,
+            mime_type=upload.content_type,
+            details={"transcription_model": "test"},
+        )
+
+    monkeypatch.setattr("app.api.context.create_url_context_item", fake_create_url_context_item)
+    monkeypatch.setattr("app.api.context.create_voice_context_item", fake_create_voice_context_item)
 
     brand_context_profile = {
         "positioning": "Bia makes premium movement essentials for women who care about fit, comfort, and quality.",
@@ -114,6 +153,15 @@ def test_full_flow(monkeypatch) -> None:
     assert checkout.status_code == 200
     assert checkout.json()["activated"] is False
     assert checkout.json()["checkout_url"] == "https://checkout.stripe.test/session/cs_test_123"
+
+    reconciled = client.post(
+        "/billing/reconcile-checkout",
+        json={"campaign_id": campaign_id},
+        headers=headers,
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["activated"] is True
+    assert reconciled.json()["status"] == "active"
 
     activate = client.post(
         "/billing/webhooks/stripe",
@@ -176,6 +224,26 @@ def test_full_flow(monkeypatch) -> None:
     )
     assert context_upload.status_code == 200
     assert context_upload.json()["kind"] == "file"
+
+    context_social = client.post(
+        f"/campaigns/{campaign_id}/context/url",
+        headers=headers,
+        json={
+            "url": "https://instagram.com/bia",
+            "kind": "social_profile",
+        },
+    )
+    assert context_social.status_code == 200
+    assert context_social.json()["kind"] == "social_profile"
+    assert context_social.json()["details"]["platform"] == "instagram"
+
+    context_voice = client.post(
+        f"/campaigns/{campaign_id}/context/voice",
+        headers=headers,
+        files={"file": ("voice-note.webm", b"audio-bytes", "audio/webm")},
+    )
+    assert context_voice.status_code == 200
+    assert context_voice.json()["kind"] == "voice_note"
 
     started_listener = client.post(f"/campaigns/{campaign_id}/listener/start", headers=headers)
     assert started_listener.status_code == 200
@@ -252,7 +320,7 @@ def test_full_flow(monkeypatch) -> None:
     assert agent_config_json["budget"]["remaining"] > 0
     assert agent_config_json["context"]["positioning"].startswith("Bia makes premium")
     assert "Made in Canada" in agent_config_json["context"]["proof_points"]
-    assert len(agent_config_json["context"]["seeded_context_items"]) >= 2
+    assert len(agent_config_json["context"]["seeded_context_items"]) >= 4
     assert "attributes" in agent_config_json["products"][0]
     assert len(agent_config_json["products"][0]["key_selling_points"]) >= 1
     product_id = agent_config_json["products"][0]["id"]

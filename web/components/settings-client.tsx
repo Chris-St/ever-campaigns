@@ -43,6 +43,7 @@ export function SettingsClient() {
   const [competitionEnabled, setCompetitionEnabled] = useState(true);
   const [contextTitle, setContextTitle] = useState("Operator note");
   const [contextBody, setContextBody] = useState("");
+  const [socialUrls, setSocialUrls] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [listenerSaving, setListenerSaving] = useState(false);
@@ -283,25 +284,63 @@ export function SettingsClient() {
     }
   }
 
-  async function handleSaveVoiceTranscript(transcript: string) {
-    if (!token || !campaign || !transcript.trim()) {
+  async function handleSaveVoiceFile(file: File) {
+    if (!token || !campaign) {
       return;
     }
     setListenerSaving(true);
     try {
-      await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/notes`, {
+      const formData = new FormData();
+      formData.append("file", file);
+      await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/voice`, {
         method: "POST",
         token,
-        body: {
-          title: `Voice note ${new Date().toLocaleTimeString()}`,
-          content: transcript,
-          kind: "voice_note",
-        },
+        body: formData,
       });
       await refreshContextItems();
       setError(null);
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : "Unable to save voice note.");
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Unable to transcribe and save the voice note.";
+      setError(message);
+      throw caughtError instanceof Error ? caughtError : new Error(message);
+    } finally {
+      setListenerSaving(false);
+    }
+  }
+
+  async function handleImportSocialUrls() {
+    if (!token || !campaign) {
+      return;
+    }
+    const urls = Array.from(
+      new Set(
+        socialUrls
+          .split(/\n|,/)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    );
+    if (!urls.length) {
+      return;
+    }
+    setListenerSaving(true);
+    try {
+      for (const url of urls) {
+        await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/url`, {
+          method: "POST",
+          token,
+          body: {
+            url,
+            kind: "social_profile",
+          },
+        });
+      }
+      setSocialUrls("");
+      await refreshContextItems();
+      setError(null);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to import those social URLs.");
     } finally {
       setListenerSaving(false);
     }
@@ -637,7 +676,7 @@ export function SettingsClient() {
           <div className="space-y-6">
             <section className="panel p-6">
               <p className="eyebrow">Context</p>
-              <h2 className="font-display text-2xl text-white">Files, notes, and voice</h2>
+              <h2 className="font-display text-2xl text-white">Files, socials, notes, and voice</h2>
               <p className="mt-3 text-sm leading-7 text-slate-400">
                 Add more truth to the agent whenever you learn something new about the brand, offer, product language, or constraints.
               </p>
@@ -668,6 +707,27 @@ export function SettingsClient() {
                 </div>
 
                 <div className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
+                  <p className="text-sm font-medium text-white">Import social URLs</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-400">
+                    Paste public Instagram, TikTok, X, Reddit, YouTube, creator, or review pages. Ever will extract whatever readable context it can and feed it into memory.
+                  </p>
+                  <textarea
+                    value={socialUrls}
+                    onChange={(event) => setSocialUrls(event.target.value)}
+                    rows={5}
+                    placeholder={"https://instagram.com/bia\nhttps://tiktok.com/@bia\nhttps://x.com/..."}
+                    className="mt-3 w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none"
+                  />
+                  <button
+                    onClick={() => void handleImportSocialUrls()}
+                    disabled={listenerSaving || !socialUrls.trim()}
+                    className="mt-3 rounded-full border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    Import social context
+                  </button>
+                </div>
+
+                <div className="rounded-[1.5rem] border border-white/8 bg-white/4 p-5">
                   <input
                     value={contextTitle}
                     onChange={(event) => setContextTitle(event.target.value)}
@@ -689,9 +749,7 @@ export function SettingsClient() {
                   </button>
                 </div>
 
-                <VoiceNoteCapture
-                  onComplete={(transcript) => void handleSaveVoiceTranscript(transcript)}
-                />
+                <VoiceNoteCapture onComplete={handleSaveVoiceFile} disabled={listenerSaving} />
               </div>
             </section>
 

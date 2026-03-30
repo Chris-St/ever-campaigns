@@ -1,5 +1,5 @@
-import { OnboardingWizard } from "@/components/onboarding-wizard";
+import { MinimalOnboardingConsole } from "@/components/minimal-onboarding-console";
 
 export default function OnboardingPage() {
-  return <OnboardingWizard />;
+  return <MinimalOnboardingConsole />;
 }

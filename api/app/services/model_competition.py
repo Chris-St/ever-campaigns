@@ -106,15 +106,21 @@ def normalize_competition_config(config: dict[str, Any] | None) -> dict[str, Any
         normalized["mode"] = "single_lane"
     elif normalized["mode"] not in {"single_lane", "shadow", "best_of_n"}:
         normalized["mode"] = defaults["mode"]
+    elif normalized["enabled"]:
+        for lane in normalized_lanes:
+            if lane["provider"] == "heuristic":
+                lane["enabled"] = False
     return normalized
 
 
 def enabled_competition_lanes(config: dict[str, Any] | None) -> list[dict[str, Any]]:
     competition = normalize_competition_config(config)
     lanes = [lane for lane in competition["lanes"] if lane["enabled"] and lane["available"]]
+    non_heuristic = [lane for lane in lanes if lane["provider"] != "heuristic"]
     if not competition["enabled"]:
-        for lane in lanes:
-            if lane["provider"] != "heuristic":
-                return [lane]
+        for lane in non_heuristic:
+            return [lane]
         return lanes[:1]
+    if non_heuristic:
+        return non_heuristic
     return lanes

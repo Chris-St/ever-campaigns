@@ -43,7 +43,7 @@ export default function Home() {
                   Give an agent context, a budget, and one job: sell.
                 </h1>
                 <p className="max-w-2xl text-lg leading-9 text-slate-300">
-                  Upload the brand brief. Speak extra context. Fund the compute budget. Ever lets the
+                  Upload the brand brief. Speak extra context. Set a compute budget. Ever lets the
                   internet and the models decide the tactics, then measures Return on Compute.
                 </p>
                 <div className="flex flex-wrap gap-3">

@@ -60,6 +60,7 @@ export function OnboardingWizard() {
   const [error, setError] = useState<string | null>(null);
   const [textNoteTitle, setTextNoteTitle] = useState("Founder brief");
   const [textNoteBody, setTextNoteBody] = useState("");
+  const [socialUrls, setSocialUrls] = useState("");
 
   const activeProducts = useMemo(
     () => products.filter((product) => product.status !== "paused"),
@@ -116,6 +117,7 @@ export function OnboardingWizard() {
       return;
     }
     const resolvedCampaignId = campaignId;
+    const resolvedToken = token;
     if (checkoutState === "cancel") {
       setError("Stripe checkout was canceled before the experiment was funded.");
       setStep(2);
@@ -125,13 +127,35 @@ export function OnboardingWizard() {
     let cancelled = false;
     async function finalizeCheckout() {
       setBusyLabel("Finalizing payment...");
+      try {
+        await loadCampaignExperience(resolvedCampaignId, resolvedToken);
+      } catch {
+        // Keep going even if the initial campaign reload lands before Stripe metadata settles.
+      }
       for (let attempt = 0; attempt < 10; attempt += 1) {
-        const nextCampaign = await apiRequest<CampaignOverview>(`/campaigns/${resolvedCampaignId}`, {
+        let nextCampaign = await apiRequest<CampaignOverview>(`/campaigns/${resolvedCampaignId}`, {
           method: "GET",
-          token,
+          token: resolvedToken,
         });
         if (cancelled) {
           return;
+        }
+        if (nextCampaign.status !== "active" && attempt >= 2) {
+          try {
+            const reconciliation = await apiRequest<BillingCheckoutResponse>("/billing/reconcile-checkout", {
+              method: "POST",
+              token: resolvedToken,
+              body: { campaign_id: resolvedCampaignId },
+            });
+            if (reconciliation.activated) {
+              nextCampaign = await apiRequest<CampaignOverview>(`/campaigns/${resolvedCampaignId}`, {
+                method: "GET",
+                token: resolvedToken,
+              });
+            }
+          } catch {
+            // If reconciliation fails, keep polling and let the webhook still resolve the state.
+          }
         }
         if (nextCampaign.status === "active") {
           setCheckoutResponse({
@@ -141,7 +165,7 @@ export function OnboardingWizard() {
             status: nextCampaign.status,
             message: "Stripe confirmed payment. Your budget is live.",
           });
-          await loadCampaignExperience(resolvedCampaignId, token as string);
+          await loadCampaignExperience(resolvedCampaignId, resolvedToken);
           router.replace("/onboarding");
           setBusyLabel(null);
           return;
@@ -151,6 +175,7 @@ export function OnboardingWizard() {
       if (!cancelled) {
         setBusyLabel(null);
         setError("Stripe completed, but Ever is still waiting on the webhook confirmation.");
+        setStep(2);
       }
     }
     void finalizeCheckout();
@@ -381,6 +406,68 @@ export function OnboardingWizard() {
     }
   }
 
+  async function handleImportContextUrls() {
+    if (!token || !campaign) {
+      return;
+    }
+    const urls = Array.from(
+      new Set(
+        socialUrls
+          .split(/\n|,/)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    );
+    if (!urls.length) {
+      return;
+    }
+    setBusyLabel("Importing social context...");
+    setError(null);
+    try {
+      for (const url of urls) {
+        await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/url`, {
+          method: "POST",
+          token,
+          body: {
+            url,
+            kind: "social_profile",
+          },
+        });
+      }
+      setSocialUrls("");
+      await refreshContextItems();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to import those social URLs.");
+    } finally {
+      setBusyLabel(null);
+    }
+  }
+
+  async function handleUploadVoiceNote(file: File) {
+    if (!token || !campaign) {
+      return;
+    }
+    setBusyLabel("Transcribing voice note...");
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      await apiRequest<ContextItemRecord>(`/campaigns/${campaign.id}/context/voice`, {
+        method: "POST",
+        token,
+        body: formData,
+      });
+      await refreshContextItems();
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Unable to transcribe and save the voice note.";
+      setError(message);
+      throw caughtError instanceof Error ? caughtError : new Error(message);
+    } finally {
+      setBusyLabel(null);
+    }
+  }
+
   if (loading || !token) {
     return (
       <div className="flex min-h-screen items-center justify-center px-6 text-slate-300">
@@ -476,8 +563,8 @@ export function OnboardingWizard() {
         ) : null}
 
         {step === 2 && campaign && listenerStatus && brandVoice && brandContext ? (
-          <section className="grid gap-6 xl:grid-cols-[1.04fr_0.96fr]">
-            <div className="space-y-6">
+          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.04fr)_minmax(320px,0.96fr)]">
+            <div className="min-w-0 space-y-6">
               <section className="panel p-6">
                 <p className="eyebrow">Step 2</p>
                 <h2 className="font-display text-3xl text-white">Brief, fund, and launch the experiment</h2>
@@ -500,18 +587,18 @@ export function OnboardingWizard() {
                     Hero product first
                   </span>
                 </div>
-                <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                <div className="mt-5 grid gap-4 2xl:grid-cols-2">
                   {products.map((product) => {
                     const active = product.status !== "paused";
                     return (
                       <article
                         key={product.id ?? product.name}
-                        className={`rounded-[1.5rem] border p-4 ${
+                        className={`overflow-hidden rounded-[1.5rem] border p-5 ${
                           active ? "border-emerald-400/20 bg-emerald-500/8" : "border-white/8 bg-white/4"
                         }`}
                       >
-                        <div className="flex gap-4">
-                          <div className="relative h-20 w-20 overflow-hidden rounded-[1rem] border border-white/10 bg-slate-950/70">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                          <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-[1rem] border border-white/10 bg-slate-950/70">
                             <Image
                               src={fallbackImageSrc(product.images[0])}
                               alt={product.name}
@@ -521,27 +608,28 @@ export function OnboardingWizard() {
                             />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <p className="font-medium text-white">{product.name}</p>
-                                <p className="mt-1 text-sm text-slate-400">
-                                  {formatCurrency(product.price, product.currency)} • {product.category ?? "uncategorized"}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => updateProduct(product.id, active ? "paused" : "active")}
-                                className={`rounded-full px-3 py-2 text-xs uppercase tracking-[0.22em] ${
-                                  active
-                                    ? "bg-emerald-400 text-slate-950"
-                                    : "border border-white/10 bg-white/6 text-slate-200"
-                                }`}
-                              >
-                                {active ? "Included" : "Include"}
-                              </button>
-                            </div>
+                            <p className="max-w-[24rem] text-2xl font-medium leading-tight text-white">{product.name}</p>
+                            <p className="mt-2 text-sm text-slate-400">
+                              {formatCurrency(product.price, product.currency)} • {product.category ?? "uncategorized"}
+                            </p>
                             <p className="mt-3 text-sm leading-7 text-slate-300">{product.description}</p>
                           </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                            {active ? "Active in experiment" : "Paused"}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => updateProduct(product.id, active ? "paused" : "active")}
+                            className={`shrink-0 rounded-full px-4 py-2 text-xs uppercase tracking-[0.22em] ${
+                              active
+                                ? "bg-emerald-400 text-slate-950"
+                                : "border border-white/10 bg-white/6 text-slate-200"
+                            }`}
+                          >
+                            {active ? "Included" : "Include"}
+                          </button>
                         </div>
                       </article>
                     );
@@ -553,7 +641,7 @@ export function OnboardingWizard() {
               <section className="panel p-6">
                 <p className="eyebrow">Agent brief</p>
                 <h3 className="font-display text-2xl text-white">Give the agent more truth</h3>
-                <div className="mt-5 grid gap-5 xl:grid-cols-[0.98fr_1.02fr]">
+                <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,0.98fr)_minmax(0,1.02fr)]">
                   <div className="space-y-5">
                     <label className="block space-y-3">
                       <span className="text-sm text-slate-300">Brand story</span>
@@ -578,6 +666,27 @@ export function OnboardingWizard() {
                         className="min-h-[180px] w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none"
                       />
                     </label>
+
+                    <div className="rounded-[1.4rem] border border-white/8 bg-white/4 p-4">
+                      <p className="text-sm font-medium text-white">Social and brand URLs</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-400">
+                        Paste Instagram, TikTok, X, Reddit, YouTube, creator pages, founder posts, or any public brand URLs. Ever will pull the visible context into memory.
+                      </p>
+                      <textarea
+                        value={socialUrls}
+                        onChange={(event) => setSocialUrls(event.target.value)}
+                        placeholder={"https://instagram.com/bia\nhttps://tiktok.com/@bia\nhttps://x.com/..." }
+                        className="mt-3 min-h-[130px] w-full rounded-[1rem] border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleImportContextUrls()}
+                        disabled={!socialUrls.trim() || Boolean(busyLabel)}
+                        className="mt-3 rounded-full border border-white/10 bg-white/6 px-4 py-2 text-sm text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Import social context
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-5">
@@ -620,15 +729,7 @@ export function OnboardingWizard() {
                       </button>
                     </div>
 
-                    <VoiceNoteCapture
-                      onComplete={(transcript) =>
-                        void handleAddContextNote(
-                          "voice_note",
-                          `Voice note ${new Date().toLocaleTimeString()}`,
-                          transcript,
-                        )
-                      }
-                    />
+                    <VoiceNoteCapture onComplete={handleUploadVoiceNote} disabled={Boolean(busyLabel)} />
                   </div>
                 </div>
 
@@ -658,7 +759,7 @@ export function OnboardingWizard() {
               </section>
             </div>
 
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-6 xl:sticky xl:top-6 xl:self-start">
               <section className="panel p-6">
                 <p className="eyebrow">Budget</p>
                 <h3 className="font-display text-2xl text-white">Fund the objective, not the tactic</h3>

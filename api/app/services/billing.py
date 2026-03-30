@@ -8,6 +8,8 @@ from app.core.config import settings
 
 
 def stripe_mode() -> str:
+    if settings.self_funded_mode:
+        return "self_funded"
     key = settings.stripe_secret_key or ""
     if key.startswith("sk_test_"):
         return "stripe_test"
@@ -29,6 +31,16 @@ def require_webhook_secret() -> str:
 
 
 def create_checkout_session(campaign, user) -> dict[str, Any]:
+    if settings.self_funded_mode:
+        return {
+            "id": f"self-funded-{campaign.id[:8]}",
+            "url": None,
+            "customer_id": user.stripe_customer_id,
+            "subscription_id": None,
+            "mode": stripe_mode(),
+            "activated": True,
+            "message": "Self-funded mode is active. Ever will use your configured API accounts and meter spend against the campaign budget.",
+        }
     require_stripe()
     brand_name = (
         campaign.brand_voice_profile.get("brand_name")
@@ -73,7 +85,9 @@ def create_checkout_session(campaign, user) -> dict[str, Any]:
     if user.stripe_customer_id:
         session_params["customer"] = user.stripe_customer_id
     else:
-        session_params["customer_creation"] = "always"
+        # Stripe creates the customer automatically for subscription-mode Checkout.
+        # `customer_creation` is only valid for one-time payment sessions.
+        session_params["customer_email"] = user.email
     session = stripe.checkout.Session.create(**session_params)
     return {
         "id": session.id,
@@ -90,3 +104,10 @@ def construct_webhook_event(payload: bytes, signature: str | None) -> Any:
     if not signature:
         raise RuntimeError("Missing Stripe signature header.")
     return stripe.Webhook.construct_event(payload, signature, webhook_secret)
+
+
+def retrieve_checkout_session(session_id: str) -> Any:
+    require_stripe()
+    if not session_id:
+        raise RuntimeError("Stripe checkout session id is missing.")
+    return stripe.checkout.Session.retrieve(session_id)

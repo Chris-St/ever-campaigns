@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-3-5-sonnet-latest"
     openai_api_key: str | None = None
     openai_model: str = "gpt-5"
+    openai_transcription_model: str = "gpt-4o-mini-transcribe"
+    self_funded_mode: bool = True
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     reddit_client_id: str | None = None

@@ -4,7 +4,14 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from app.openclaw_agent import build_discovery_queries, discover_live_opportunities
+from app.openclaw_agent import (
+    MIN_FUNDED_DISCOVERY_REFRESH_SECONDS,
+    build_discovery_queries,
+    discover_live_opportunities,
+    discovery_refresh_seconds,
+    funded_live_mode,
+)
+from app.services.model_competition import enabled_competition_lanes, normalize_competition_config
 
 
 def sample_config() -> dict:
@@ -52,6 +59,52 @@ def test_build_discovery_queries_biases_toward_bia_use_cases() -> None:
     assert "running underwear chafing" in queries
     assert "workout underwear recommendation" in queries
     assert any("organic cotton" in query for query in queries)
+
+
+def test_funded_live_mode_detects_paid_propose_only_campaigns() -> None:
+    assert funded_live_mode({"campaign_status": "active", "operating_mode": "propose_only"}) is True
+    assert funded_live_mode({"campaign_status": "pending_payment", "operating_mode": "propose_only"}) is False
+    assert funded_live_mode({"campaign_status": "active", "operating_mode": "simulation"}) is False
+
+
+def test_discovery_refresh_seconds_frontloads_then_slows_with_budget() -> None:
+    fast = discovery_refresh_seconds(
+        {
+            "campaign_status": "active",
+            "operating_mode": "propose_only",
+            "budget": {"monthly": 50.0, "remaining": 50.0},
+            "constraints": {"max_actions_per_day": 50},
+        }
+    )
+    slower = discovery_refresh_seconds(
+        {
+            "campaign_status": "active",
+            "operating_mode": "propose_only",
+            "budget": {"monthly": 50.0, "remaining": 35.0},
+            "constraints": {"max_actions_per_day": 50},
+        }
+    )
+
+    assert fast >= MIN_FUNDED_DISCOVERY_REFRESH_SECONDS
+    assert slower >= fast
+
+
+def test_enabled_competition_prefers_openai_over_heuristic_when_available(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.model_competition.settings.openai_api_key", "sk-test-openai")
+    monkeypatch.setattr("app.services.model_competition.settings.openai_model", "gpt-5.4")
+    competition = normalize_competition_config(
+        {
+            "enabled": True,
+            "mode": "best_of_n",
+            "lanes": [
+                {"id": "heuristic:objective-baseline", "provider": "heuristic", "model": "objective-baseline", "enabled": True},
+                {"id": "openai:gpt-5.4", "provider": "openai", "model": "gpt-5.4", "enabled": True},
+            ],
+        }
+    )
+    lanes = enabled_competition_lanes(competition)
+    assert any(lane["provider"] == "openai" for lane in lanes)
+    assert all(lane["provider"] != "heuristic" for lane in lanes)
 
 
 def test_discover_live_opportunities_prefers_real_reddit_threads() -> None:

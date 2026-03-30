@@ -25,6 +25,10 @@ DISCOVERY_REFRESH_SECONDS = 180
 LIVE_PROPOSAL_INTERVAL_SECONDS = 20
 FALLBACK_PROPOSAL_INTERVAL_SECONDS = 10
 SEARCH_RESULT_LIMIT = 6
+MIN_FUNDED_DISCOVERY_REFRESH_SECONDS = 180
+MAX_FUNDED_DISCOVERY_REFRESH_SECONDS = 900
+ESTIMATED_DISCOVERY_CYCLE_COST_USD = 0.0145
+AUTONOMOUS_TOOL_CALL_LIMIT = 6
 
 
 DEMO_TEMPLATES: list[dict[str, str]] = [
@@ -237,6 +241,68 @@ def source_url(surface: str, seed: str) -> str | None:
     if surface == "blog":
         return f"https://ever.local/drafts/{seed[:10]}"
     return None
+
+
+def funded_live_mode(config: dict[str, Any]) -> bool:
+    return (
+        str(config.get("campaign_status") or "") == "active"
+        and str(config.get("operating_mode") or "") == "propose_only"
+    )
+
+
+def active_model_lane(config: dict[str, Any]) -> dict[str, Any] | None:
+    competition = config.get("competition") or {}
+    lanes = competition.get("lanes") or []
+    non_heuristic = [
+        lane
+        for lane in lanes
+        if isinstance(lane, dict)
+        and lane.get("enabled")
+        and lane.get("available")
+        and lane.get("provider") != "heuristic"
+    ]
+    if non_heuristic:
+        return non_heuristic[0]
+    heuristic = [
+        lane
+        for lane in lanes
+        if isinstance(lane, dict) and lane.get("enabled") and lane.get("available")
+    ]
+    return heuristic[0] if heuristic else None
+
+
+def discovery_refresh_seconds(config: dict[str, Any]) -> int:
+    if not funded_live_mode(config):
+        return DISCOVERY_REFRESH_SECONDS
+
+    budget = config.get("budget") or {}
+    constraints = config.get("constraints") or {}
+    monthly_budget = float(budget.get("monthly") or 0.0)
+    remaining_budget = float(budget.get("remaining") or 0.0)
+    if monthly_budget <= 0 or remaining_budget <= 0:
+        return MAX_FUNDED_DISCOVERY_REFRESH_SECONDS
+
+    spent_budget = max(monthly_budget - remaining_budget, 0.0)
+    daily_budget = monthly_budget / 30.0
+    frontload_multiplier = 4.0 if spent_budget <= monthly_budget * 0.10 else 2.0 if spent_budget <= monthly_budget * 0.25 else 1.0
+    target_daily_discovery_budget = max(
+        ESTIMATED_DISCOVERY_CYCLE_COST_USD,
+        min(remaining_budget, daily_budget * frontload_multiplier),
+    )
+    max_actions_per_day = max(int(constraints.get("max_actions_per_day") or 50), 1)
+    max_cycles_per_day = max_actions_per_day * 12
+    cycles_per_day = max(
+        1,
+        min(
+            max_cycles_per_day,
+            int(target_daily_discovery_budget / ESTIMATED_DISCOVERY_CYCLE_COST_USD),
+        ),
+    )
+    interval_seconds = int(round(86400 / cycles_per_day))
+    return max(
+        MIN_FUNDED_DISCOVERY_REFRESH_SECONDS,
+        min(interval_seconds, MAX_FUNDED_DISCOVERY_REFRESH_SECONDS),
+    )
 
 
 def compute_cost(input_tokens: int, output_tokens: int) -> float:
@@ -599,6 +665,468 @@ def build_model_context(config: dict[str, Any]) -> dict[str, Any]:
             for product in config.get("products", [])
         ],
     }
+
+
+def autonomous_tool_catalog() -> list[dict[str, str]]:
+    return [
+        {
+            "tool": "web_search",
+            "description": "Search the public web broadly for opportunities, people, communities, or demand signals.",
+            "required_args": "query",
+        },
+        {
+            "tool": "reddit_search",
+            "description": "Search live public Reddit conversations when you think Reddit might contain demand or context.",
+            "required_args": "query",
+        },
+        {
+            "tool": "fetch_url",
+            "description": "Open a specific public URL to inspect a page more deeply before deciding on a tactic.",
+            "required_args": "url",
+        },
+    ]
+
+
+def normalize_tool_name(value: str) -> str:
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "search": "web_search",
+        "web": "web_search",
+        "google": "web_search",
+        "search_web": "web_search",
+        "reddit": "reddit_search",
+        "search_reddit": "reddit_search",
+        "open_url": "fetch_url",
+        "open": "fetch_url",
+        "visit": "fetch_url",
+        "fetch": "fetch_url",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def normalize_tool_calls(payload: Any) -> list[dict[str, str]]:
+    raw_calls: list[Any]
+    if isinstance(payload, dict):
+        raw_calls = payload.get("tool_calls", [])
+    elif isinstance(payload, list):
+        raw_calls = payload
+    else:
+        raw_calls = []
+
+    normalized: list[dict[str, str]] = []
+    for item in raw_calls:
+        if not isinstance(item, dict):
+            continue
+        tool = normalize_tool_name(str(item.get("tool") or item.get("name") or ""))
+        arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else item
+        query = str(arguments.get("query") or arguments.get("q") or "").strip()
+        url = str(arguments.get("url") or arguments.get("href") or "").strip()
+        reason = str(arguments.get("reason") or item.get("reason") or "").strip()
+        if tool == "web_search" and query:
+            normalized.append({"tool": tool, "query": query, "reason": reason})
+        elif tool == "reddit_search" and query:
+            normalized.append({"tool": tool, "query": query, "reason": reason})
+        elif tool == "fetch_url" and url.startswith("http"):
+            normalized.append({"tool": tool, "url": url, "reason": reason})
+    return normalized[:AUTONOMOUS_TOOL_CALL_LIMIT]
+
+
+def extract_page_summary(html: str) -> tuple[str, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "img", "iframe"]):
+        tag.decompose()
+    title = compact_text(
+        (
+            (soup.title.get_text(" ", strip=True) if soup.title else "")
+            or (soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else "")
+        ),
+        180,
+    )
+    meta_description = ""
+    meta = soup.select_one('meta[name="description"], meta[property="og:description"]')
+    if meta is not None:
+        meta_description = compact_text(meta.get("content") or "", 260)
+    paragraphs = [
+        compact_text(node.get_text(" ", strip=True), 260)
+        for node in soup.select("article p, main p, p")
+        if node.get_text(" ", strip=True)
+    ][:3]
+    summary = compact_text(
+        " ".join(part for part in [meta_description, *paragraphs] if part),
+        420,
+    )
+    return title, summary
+
+
+def estimate_observation_value(
+    *,
+    intent_score: dict[str, int],
+    fit_score: int,
+    keyword_hits: int,
+    source_depth_bonus: int = 0,
+) -> int:
+    return clamp_score(
+        intent_score.get("composite", 0) * 0.72
+        + fit_score * 1.15
+        + keyword_hits * 2.0
+        + source_depth_bonus,
+        0,
+        100,
+    )
+
+
+def fetch_public_url_observation(
+    client: httpx.Client,
+    config: dict[str, Any],
+    url: str,
+    *,
+    reason: str,
+    seen_source_urls: set[str],
+) -> dict[str, Any] | None:
+    if not url.startswith("http") or url in seen_source_urls:
+        return None
+    response = client.get(url, headers=search_headers(), timeout=20.0)
+    response.raise_for_status()
+    if "text/html" not in response.headers.get("content-type", ""):
+        return None
+    title, summary = extract_page_summary(response.text)
+    if not title and not summary:
+        return None
+    products = config.get("products", [])
+    if not products:
+        return None
+    combined = compact_text(f"{title} {summary} {reason}".strip(), 420)
+    keywords = build_keyword_watchlist(config)
+    keyword_hits = sum(1 for keyword in keywords if keyword and keyword in combined.lower())
+    product = choose_product(products, {"content": combined, "description": title or combined})
+    fit_score = product_fit_score(product, combined)
+    if fit_score < 6 and keyword_hits == 0:
+        return None
+    surface = classify_surface(url, "direct", title, summary)
+    intent_score = compute_search_result_scores(
+        title=title or clean_domain(url),
+        snippet=summary,
+        query=reason or clean_domain(url),
+        family="direct",
+        fit_score=fit_score,
+        keyword_hits=keyword_hits,
+    )
+    return {
+        "source_url": url,
+        "surface": surface,
+        "domain": clean_domain(url),
+        "title": title or clean_domain(url) or "Direct page fetch",
+        "snippet": summary,
+        "query": reason,
+        "family": "direct",
+        "source_author": clean_domain(url) or "public-web",
+        "source_context": "Direct page fetch requested by the planner.",
+        "candidate_product_id": product.get("id"),
+        "fit_score": fit_score,
+        "keyword_hits": keyword_hits,
+        "intent_score": intent_score,
+        "expected_return_score": estimate_observation_value(
+            intent_score=intent_score,
+            fit_score=fit_score,
+            keyword_hits=keyword_hits,
+            source_depth_bonus=6,
+        ),
+    }
+
+
+def plan_autonomous_tool_calls_with_openai(
+    client: httpx.Client,
+    config: dict[str, Any],
+) -> tuple[list[dict[str, str]], float]:
+    if not openai_available():
+        return [], 0.0
+
+    system_prompt = (
+        "You are an autonomous commerce operator with full ownership of the objective: "
+        "generate more attributed revenue than compute cost. "
+        "You are not channel-constrained. You are not tactic-constrained. "
+        "You decide what to investigate next. Use the smallest set of tool calls likely to reveal "
+        "profitable actions, but reserve some room for novel experiments and non-obvious ideas. "
+        "Return JSON only."
+    )
+    user_prompt = (
+        "Choose the next public-web investigations. "
+        "Available tools are below. "
+        "Return JSON in this shape: "
+        '{"tool_calls":[{"tool":"web_search|reddit_search|fetch_url","arguments":{"query":"...","url":"...","reason":"..."}}]}. '
+        "Do not propose actions yet. First gather better observations. "
+        "It is okay to explore unusual but legal paths if they might improve return on compute.\n\n"
+        f"Tools:\n{json.dumps(autonomous_tool_catalog(), indent=2)}\n\n"
+        f"Context:\n{json.dumps(build_model_context(config), indent=2)}"
+    )
+    try:
+        result = call_openai_json(
+            client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_output_tokens=1200,
+        )
+    except Exception:
+        return [], 0.0
+    if result is None:
+        return [], 0.0
+    parsed, usage = result
+    tool_calls = normalize_tool_calls(parsed)
+    return tool_calls, compute_cost(usage["input_tokens"], usage["output_tokens"])
+
+
+def execute_autonomous_tool_calls(
+    client: httpx.Client,
+    config: dict[str, Any],
+    tool_calls: list[dict[str, str]],
+    seen_source_urls: set[str],
+) -> list[dict[str, Any]]:
+    products = config.get("products", [])
+    if not products:
+        return []
+    keywords = build_keyword_watchlist(config)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    observations: list[dict[str, Any]] = []
+    batch_seen = set(seen_source_urls)
+
+    for call in tool_calls:
+        tool = call["tool"]
+        if tool == "reddit_search":
+            try:
+                observations.extend(
+                    search_reddit_posts(
+                        client,
+                        call["query"],
+                        keywords=keywords,
+                        products=products,
+                        now_ts=now_ts,
+                        batch_seen=batch_seen,
+                    )
+                )
+            except Exception:
+                continue
+            continue
+
+        if tool == "fetch_url":
+            try:
+                observation = fetch_public_url_observation(
+                    client,
+                    config,
+                    call["url"],
+                    reason=call.get("reason", ""),
+                    seen_source_urls=batch_seen,
+                )
+            except Exception:
+                observation = None
+            if observation is not None:
+                observations.append(observation)
+                batch_seen.add(call["url"])
+            continue
+
+        if tool == "web_search":
+            try:
+                html = search_html(client, call["query"])
+            except Exception:
+                continue
+            for result in parse_search_results(html):
+                source_link = result["url"]
+                if source_link in batch_seen:
+                    continue
+                surface = classify_surface(source_link, "exploration", result["title"], result["snippet"])
+                combined = f"{result['title']} {result['snippet']} {call['query']}"
+                keyword_hits = sum(1 for keyword in keywords if keyword and keyword in combined.lower())
+                product = choose_product(products, {"content": combined, "description": result["title"]})
+                fit_score = product_fit_score(product, combined)
+                if fit_score < 5 and keyword_hits == 0:
+                    continue
+                intent_score = compute_search_result_scores(
+                    title=result["title"],
+                    snippet=result["snippet"],
+                    query=call["query"],
+                    family="exploration",
+                    fit_score=fit_score,
+                    keyword_hits=keyword_hits,
+                )
+                observations.append(
+                    {
+                        "source_url": source_link,
+                        "surface": surface,
+                        "domain": clean_domain(source_link),
+                        "title": result["title"],
+                        "snippet": result["snippet"],
+                        "query": call["query"],
+                        "family": "exploration",
+                        "source_author": clean_domain(source_link) or "public-web",
+                        "source_context": call.get("reason") or f"Search result for '{call['query']}'",
+                        "candidate_product_id": product.get("id"),
+                        "fit_score": fit_score,
+                        "keyword_hits": keyword_hits,
+                        "intent_score": intent_score,
+                        "expected_return_score": estimate_observation_value(
+                            intent_score=intent_score,
+                            fit_score=fit_score,
+                            keyword_hits=keyword_hits,
+                        ),
+                    }
+                )
+                batch_seen.add(source_link)
+
+    observations.sort(
+        key=lambda item: (
+            int((item.get("expected_return_score") or 0)),
+            int((item.get("intent_score") or {}).get("composite", 0)),
+            int(item.get("fit_score", 0)),
+        ),
+        reverse=True,
+    )
+    return observations[:28]
+
+
+def synthesize_autonomous_proposals_with_openai(
+    client: httpx.Client,
+    config: dict[str, Any],
+    observations: list[dict[str, Any]],
+    *,
+    force_exploration: bool = False,
+) -> tuple[list[dict[str, Any]], float]:
+    if not openai_available() or not observations:
+        return [], 0.0
+
+    compact_observations = [
+        {
+            "source_url": observation.get("source_url"),
+            "surface": observation.get("surface"),
+            "title": observation.get("title"),
+            "snippet": observation.get("snippet"),
+            "source_context": observation.get("source_context"),
+            "source_author": observation.get("source_author"),
+            "candidate_product_id": observation.get("candidate_product_id"),
+            "intent_score": observation.get("intent_score"),
+            "expected_return_score": observation.get("expected_return_score"),
+        }
+        for observation in observations[:24]
+    ]
+    system_prompt = (
+        "You are an autonomous commerce operator. "
+        "Your only goal is to generate more attributed revenue than compute cost. "
+        "You are allowed to invent tactics, angles, and plays. "
+        "Do not inherit channel bias from the code. "
+        "Use the observations and memory to choose whatever human-executable proposals seem most likely "
+        "to create profitable sales. "
+        + (
+            "You are currently in exploration mode. Do not freeze. "
+            "Return real experimental actions from the best available public URLs even when confidence is only moderate. "
+            "Trying things and learning is part of the job."
+            if force_exploration
+            else "Return JSON only."
+        )
+    )
+    user_prompt = (
+        "Return an array of up to 6 proposals. "
+        "Each proposal must contain: source_url, surface, action_type, product_id, description, source_content, "
+        "source_context, source_author, target_audience, rationale, proposed_response, execution_instructions, "
+        "expected_return_score, and intent_score with relevance, intent, fit, receptivity, composite. "
+        "action_type is freeform and should be the actual tactic you want the human to execute. "
+        + (
+            "You must return at least 1 and up to 3 proposals unless every observation is unusable or unsafe. "
+            "Bias toward interesting experiments over doing nothing. "
+            if force_exploration
+            else "Only return proposals you believe are worth spending compute and operator time on. "
+        )
+        + "It is okay to include unconventional tactics if they are legal and can be executed manually.\n\n"
+        f"{json.dumps({'context': build_model_context(config), 'observations': compact_observations}, indent=2)}"
+    )
+    try:
+        result = call_openai_json(
+            client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_output_tokens=2200,
+        )
+    except Exception:
+        return [], 0.0
+    if result is None:
+        return [], 0.0
+    parsed, usage = result
+    proposals: list[dict[str, Any]] = []
+    valid_product_ids = {str(product.get("id")) for product in config.get("products", [])}
+    if isinstance(parsed, list):
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            product_id = str(item.get("product_id", "")).strip()
+            source_url = str(item.get("source_url", "")).strip()
+            if not source_url or product_id not in valid_product_ids:
+                continue
+            intent_score = item.get("intent_score", {}) if isinstance(item.get("intent_score"), dict) else {}
+            action_type = str(item.get("action_type", "other")).strip() or "other"
+            proposals.append(
+                {
+                    "category": category_for_action(action_type),
+                    "surface": str(item.get("surface", "internet")).strip() or "internet",
+                    "action_type": action_type,
+                    "description": str(item.get("description", "Autonomous opportunity")).strip()
+                    or "Autonomous opportunity",
+                    "content": compact_text(str(item.get("source_content", "")).strip(), 420),
+                    "author": str(item.get("source_author", "")).strip() or clean_domain(source_url) or "internet",
+                    "audience": str(item.get("target_audience", "")).strip()
+                    or "People with real purchase potential",
+                    "source_url": source_url,
+                    "source_context": str(item.get("source_context", "")).strip() or None,
+                    "intent_score": {
+                        "relevance": clamp_score(float(intent_score.get("relevance", 0) or 0)),
+                        "intent": clamp_score(float(intent_score.get("intent", 0) or 0)),
+                        "fit": clamp_score(float(intent_score.get("fit", 0) or 0)),
+                        "receptivity": clamp_score(float(intent_score.get("receptivity", 0) or 0)),
+                        "composite": clamp_score(float(intent_score.get("composite", 0) or 0)),
+                    },
+                    "product_id": product_id,
+                    "proposed_response": str(item.get("proposed_response", "")).strip(),
+                    "rationale": str(item.get("rationale", "")).strip(),
+                    "execution_instructions": str(item.get("execution_instructions", "")).strip(),
+                    "expected_return_score": clamp_score(float(item.get("expected_return_score", 0) or 0), 0, 100),
+                }
+            )
+    proposals = [
+        proposal
+        for proposal in proposals
+        if proposal["proposed_response"] and proposal["execution_instructions"]
+    ]
+    return proposals[:6], compute_cost(usage["input_tokens"], usage["output_tokens"])
+
+
+def build_autonomous_live_queue_with_openai(
+    client: httpx.Client,
+    config: dict[str, Any],
+    seen_source_urls: set[str],
+) -> tuple[list[dict[str, Any]], float]:
+    fallback = discover_live_opportunities(client, config, seen_source_urls)
+    if not openai_available():
+        return fallback, 0.0
+
+    tool_calls, search_cost = plan_autonomous_tool_calls_with_openai(client, config)
+    if not tool_calls:
+        return fallback, search_cost
+    observations = execute_autonomous_tool_calls(client, config, tool_calls, seen_source_urls)
+    if not observations:
+        return fallback, search_cost
+    proposals, proposal_cost = synthesize_autonomous_proposals_with_openai(
+        client,
+        config,
+        observations,
+    )
+    if not proposals:
+        exploratory_proposals, exploratory_cost = synthesize_autonomous_proposals_with_openai(
+            client,
+            config,
+            observations,
+            force_exploration=True,
+        )
+        proposal_cost = round(proposal_cost + exploratory_cost, 4)
+        proposals = exploratory_proposals
+    if proposals:
+        return proposals, round(search_cost + proposal_cost, 4)
+    return fallback, round(search_cost + proposal_cost, 4)
 
 
 def generate_query_plan_with_model(client: httpx.Client, config: dict[str, Any]) -> tuple[list[dict[str, str]], float]:
@@ -1649,15 +2177,23 @@ def build_competing_live_queue(
     seed_seen = set(seen_source_urls)
 
     for lane in lanes:
-        query_plan, query_cost = lane_query_plan(client, config, lane)
-        total_cost += query_cost
-        observations = collect_live_observations(client, config, query_plan, seed_seen)
-        planned, planning_cost = lane_planned_opportunities(client, config, lane, observations)
-        total_cost += planning_cost
-        if planned:
-            opportunities = planned
+        if lane.get("provider") == "openai":
+            opportunities, lane_cost = build_autonomous_live_queue_with_openai(
+                client,
+                config,
+                seed_seen,
+            )
+            total_cost += lane_cost
         else:
-            opportunities = discover_live_opportunities(client, config, seed_seen)
+            query_plan, query_cost = lane_query_plan(client, config, lane)
+            total_cost += query_cost
+            observations = collect_live_observations(client, config, query_plan, seed_seen)
+            planned, planning_cost = lane_planned_opportunities(client, config, lane, observations)
+            total_cost += planning_cost
+            if planned:
+                opportunities = planned
+            else:
+                opportunities = discover_live_opportunities(client, config, seed_seen)
         for item in opportunities:
             item["model_provider"] = str(lane.get("provider", "heuristic"))
             item["model_name"] = str(lane.get("model", "objective-baseline"))
@@ -1767,7 +2303,8 @@ def main() -> int:
                 time.sleep(30)
                 continue
 
-            if not live_queue and time.time() - last_live_refresh > DISCOVERY_REFRESH_SECONDS:
+            current_discovery_refresh = discovery_refresh_seconds(config)
+            if not live_queue and time.time() - last_live_refresh > current_discovery_refresh:
                 live_queue, planning_cost_pending = build_competing_live_queue(
                     client,
                     config,
@@ -1789,6 +2326,7 @@ def main() -> int:
                     planning_tokens_pending = 0
                 last_live_refresh = time.time()
                 if not live_queue and planning_cost_pending > 0:
+                    reporting_lane = active_model_lane(config)
                     post_event(
                         client,
                         config["reporting"]["events_endpoint"],
@@ -1802,8 +2340,8 @@ def main() -> int:
                                 "expected return-on-compute threshold."
                             ),
                             "channels_used": [],
-                            "model_provider": None,
-                            "model_name": None,
+                            "model_provider": reporting_lane.get("provider") if reporting_lane else None,
+                            "model_name": reporting_lane.get("model") if reporting_lane else None,
                             "total_actions": 0,
                             "tokens_used": planning_tokens_pending,
                             "compute_cost_usd": planning_cost_pending,
@@ -1818,6 +2356,10 @@ def main() -> int:
             using_live_discovery = bool(live_queue)
             if using_live_discovery:
                 template = live_queue.pop(0)
+            elif funded_live_mode(config):
+                maybe_emit_strategy_update(client, config, api_key, counters, current_day)
+                time.sleep(LIVE_PROPOSAL_INTERVAL_SECONDS)
+                continue
             else:
                 template = DEMO_TEMPLATES[template_index % len(DEMO_TEMPLATES)]
                 template_index += 1
@@ -1853,7 +2395,7 @@ def main() -> int:
                 "source_url": source_link,
                 "source_content": template["content"],
                 "source_author": template["author"],
-                "source_context": template["description"],
+                "source_context": template.get("source_context") or template["description"],
                 "subreddit_or_channel": template.get("subreddit_or_channel"),
                 "target_audience": template["audience"],
                 "intent_score": intent_score,
@@ -1861,7 +2403,7 @@ def main() -> int:
                 "product_id": product["id"],
                 "referral_url": tracked_url,
                 "proposed_response": response_text,
-                "rationale": build_rationale(template, product),
+                "rationale": template.get("rationale") or build_rationale(template, product),
                 "execution_instructions": (
                     template.get("execution_instructions")
                     or build_execution_instructions(template, source_link, response_text)

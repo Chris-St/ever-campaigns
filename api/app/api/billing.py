@@ -7,10 +7,41 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.deps import get_current_user, get_db, require_campaign_access
 from app.models.entities import Campaign, User
 from app.schemas.contracts import BillingCheckoutRequest, BillingCheckoutResponse
-from app.services.billing import construct_webhook_event, create_checkout_session, stripe_mode
+from app.services.billing import (
+    construct_webhook_event,
+    create_checkout_session,
+    retrieve_checkout_session,
+    stripe_mode,
+)
 
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+def sync_campaign_from_checkout(db: Session, campaign: Campaign) -> Campaign:
+    if stripe_mode() == "self_funded":
+        campaign.status = "active"
+        db.commit()
+        db.refresh(campaign)
+        return campaign
+    if not campaign.stripe_checkout_session_id:
+        return campaign
+    session = retrieve_checkout_session(campaign.stripe_checkout_session_id)
+    payment_status = getattr(session, "payment_status", None)
+    session_status = getattr(session, "status", None)
+    customer_id = getattr(session, "customer", None)
+    subscription_id = getattr(session, "subscription", None)
+    if session_status == "complete" and payment_status in {"paid", "no_payment_required"}:
+        campaign.status = "active"
+        if subscription_id:
+            campaign.stripe_subscription_id = subscription_id
+        if customer_id:
+            user = db.scalar(select(User).where(User.id == campaign.user_id))
+            if user is not None:
+                user.stripe_customer_id = customer_id
+        db.commit()
+        db.refresh(campaign)
+    return campaign
 
 
 @router.post("/create-checkout", response_model=BillingCheckoutResponse)
@@ -32,22 +63,28 @@ def create_checkout(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail="Unable to create Stripe checkout session") from exc
 
-    campaign.status = "pending_payment"
-    campaign.stripe_checkout_session_id = session["id"]
-    if session.get("subscription_id"):
-        campaign.stripe_subscription_id = session["subscription_id"]
-    if session.get("customer_id") and not current_user.stripe_customer_id:
-        current_user.stripe_customer_id = session["customer_id"]
+    if session["mode"] == "self_funded":
+        campaign.status = "active"
+    else:
+        campaign.status = "pending_payment"
+        campaign.stripe_checkout_session_id = session["id"]
+        if session.get("subscription_id"):
+            campaign.stripe_subscription_id = session["subscription_id"]
+        if session.get("customer_id") and not current_user.stripe_customer_id:
+            current_user.stripe_customer_id = session["customer_id"]
     db.commit()
 
     return BillingCheckoutResponse(
         mode=session["mode"],
         campaign_id=campaign.id,
-        activated=False,
+        activated=bool(session.get("activated")),
         status=campaign.status,
-        message="Redirecting to Stripe Checkout. The campaign will activate after Stripe confirms payment.",
+        message=(
+            session.get("message")
+            or "Redirecting to Stripe Checkout. The campaign will activate after Stripe confirms payment."
+        ),
         checkout_url=session["url"],
-        checkout_session_id=session["id"],
+        checkout_session_id=None if session["mode"] == "self_funded" else session["id"],
     )
 
 
@@ -57,6 +94,8 @@ async def stripe_webhook(
     stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
+    if stripe_mode() == "self_funded":
+        return {"status": "ignored", "mode": stripe_mode()}
     payload = await request.body()
     try:
         event = construct_webhook_event(payload, stripe_signature)
@@ -106,3 +145,40 @@ async def stripe_webhook(
                 db.commit()
 
     return {"status": "received", "mode": stripe_mode()}
+
+
+@router.post("/reconcile-checkout", response_model=BillingCheckoutResponse)
+def reconcile_checkout(
+    payload: BillingCheckoutRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BillingCheckoutResponse:
+    campaign = require_campaign_access(db, payload.campaign_id, current_user)
+    campaign = db.scalar(
+        select(Campaign)
+        .where(Campaign.id == campaign.id)
+        .options(joinedload(Campaign.merchant))
+    )
+    try:
+        campaign = sync_campaign_from_checkout(db, campaign)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail="Unable to reconcile Stripe checkout session") from exc
+
+    return BillingCheckoutResponse(
+        mode=stripe_mode(),
+        campaign_id=campaign.id,
+        activated=campaign.status == "active",
+        status=campaign.status,
+        message=(
+            "Self-funded mode is active. Ever is using your configured API accounts and the campaign budget as an internal spend cap."
+            if stripe_mode() == "self_funded"
+            else (
+                "Stripe confirmed payment. Your budget is live."
+                if campaign.status == "active"
+                else "Stripe checkout exists, but Ever is still waiting on the final payment confirmation."
+            )
+        ),
+        checkout_session_id=None if stripe_mode() == "self_funded" else campaign.stripe_checkout_session_id,
+    )

@@ -136,9 +136,13 @@ def compute_campaign_overview(
             "mode": stripe_mode(),
             "plan_name": f"${campaign.budget_monthly:,.0f}/month compute budget",
             "payment_method": (
-                "Managed in Stripe Checkout"
-                if campaign.stripe_checkout_session_id or campaign.stripe_subscription_id
-                else "Stripe not connected yet"
+                "Using your configured API accounts"
+                if stripe_mode() == "self_funded"
+                else (
+                    "Managed in Stripe Checkout"
+                    if campaign.stripe_checkout_session_id or campaign.stripe_subscription_id
+                    else "Stripe not connected yet"
+                )
             ),
             "status": campaign.status,
             "invoices": build_invoices(campaign),
@@ -551,6 +555,8 @@ def extract_constraint_breakdown(product: Product, match: Match) -> list[str]:
 
 
 def build_invoices(campaign: Campaign) -> list[dict]:
+    if stripe_mode() == "self_funded":
+        return []
     if not campaign.stripe_checkout_session_id and not campaign.stripe_subscription_id:
         return []
     invoice_status = "paid" if campaign.status == "active" else "open" if campaign.status == "pending_payment" else "canceled"

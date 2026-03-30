@@ -751,7 +751,13 @@ class ContextItemRecord(SchemaModel):
 class ContextNoteRequest(BaseModel):
     title: str
     content: str
-    kind: Literal["note", "voice_note", "brief"] = "note"
+    kind: Literal["note", "voice_note", "brief", "social_profile", "url"] = "note"
+
+
+class ContextUrlRequest(BaseModel):
+    url: str
+    title: str | None = None
+    kind: Literal["social_profile", "url"] = "social_profile"
 
 
 class SearchProductsRequest(BaseModel):

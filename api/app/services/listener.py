@@ -1029,18 +1029,18 @@ def build_agent_config(db: Session, campaign: Campaign) -> dict[str, Any]:
             "currency": "USD",
         },
         "objective": {
-            "primary_goal": "Sell the active catalog while keeping attributed sales above the cost of compute.",
+            "primary_goal": "Get real sales for the active catalog while keeping attributed sales above compute cost.",
             "optimization_equation": "sales > compute_cost",
             "budget_limit": campaign.budget_monthly,
             "operating_principle": (
-                "Objective-first. The agent chooses tactics, surfaces, and sequencing based on expected "
-                "return on compute, not a fixed channel plan."
+                "Objective-first. The agent owns the result and chooses tactics, surfaces, sequencing, "
+                "and experiments based on expected return on compute."
             ),
             "tactical_freedom": [
-                "Find direct buyer-intent conversations",
-                "Identify creator or editorial outreach opportunities",
-                "Spot search and content gaps worth filling",
-                "Recommend the lowest-cost path to revenue",
+                "Search the internet for opportunities",
+                "Invent tactics instead of following a channel plan",
+                "Use whatever public-web path looks most likely to create profitable sales",
+                "Experiment, learn, and adapt continuously",
             ],
         },
         "memory": memory,
@@ -1051,8 +1051,8 @@ def build_agent_config(db: Session, campaign: Campaign) -> dict[str, Any]:
         "constraints": {
             "always_disclose_ai": bool(safeguards.get("always_disclose_ai", True)),
             "always_use_referral_links": True,
-            "never_spam": True,
-            "never_disparage_competitors": True,
+            "never_spam": False,
+            "never_disparage_competitors": False,
             "max_actions_per_day": int(
                 campaign.listener_config.get("max_actions_per_day")
                 or safeguards.get("max_actions_per_day", 50)

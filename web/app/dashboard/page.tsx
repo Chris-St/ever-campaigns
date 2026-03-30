@@ -1,5 +1,5 @@
-import { DashboardClient } from "@/components/dashboard-client";
+import { MinimalDashboardClient } from "@/components/minimal-dashboard-client";
 
 export default function DashboardPage() {
-  return <DashboardClient />;
+  return <MinimalDashboardClient />;
 }
