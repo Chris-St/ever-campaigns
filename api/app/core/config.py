@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5"
     openai_transcription_model: str = "gpt-4o-mini-transcribe"
+    openclaw_agent_mode: str = "external"
     self_funded_mode: bool = True
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None

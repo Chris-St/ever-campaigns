@@ -1,0 +1,26 @@
+{
+  "ever_api": {
+    "base_url": "http://localhost:8000",
+    "campaign_id": "PASTE_CAMPAIGN_ID",
+    "api_key": "PASTE_API_KEY",
+    "events_endpoint": "http://localhost:8000/api/campaigns/PASTE_CAMPAIGN_ID/events"
+  },
+  "reddit": {
+    "client_id": "PASTE_REDDIT_CLIENT_ID",
+    "client_secret": "PASTE_REDDIT_CLIENT_SECRET",
+    "username": "PASTE_REDDIT_USERNAME",
+    "password": "PASTE_REDDIT_PASSWORD"
+  },
+  "email": {
+    "address": "PASTE_EMAIL_ADDRESS",
+    "password": "PASTE_EMAIL_APP_PASSWORD",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587
+  },
+  "referral_urls": {
+    "high_movement_thong": "http://localhost:8000/go/PRODUCT_ID_1?src=agent&cid=CAMPAIGN_ID",
+    "supersoft_thong": "http://localhost:8000/go/PRODUCT_ID_2?src=agent&cid=CAMPAIGN_ID",
+    "recovery_shorts": "http://localhost:8000/go/PRODUCT_ID_3?src=agent&cid=CAMPAIGN_ID",
+    "the_recovery_t": "http://localhost:8000/go/PRODUCT_ID_4?src=agent&cid=CAMPAIGN_ID"
+  }
+}

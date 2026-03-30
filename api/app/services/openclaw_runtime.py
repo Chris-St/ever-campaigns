@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +13,7 @@ from app.core.config import BASE_DIR, settings
 REPO_ROOT = BASE_DIR.parent
 PROCESS_RUNTIME_ROOT = BASE_DIR / ".runtime" / "openclaw"
 OPENCLAW_RUNTIME_ROOT = REPO_ROOT / ".openclaw" / "runtime" / "campaigns"
+EXTERNAL_AGENT_ROOT = REPO_ROOT / "agent"
 
 
 def utcnow_iso() -> str:
@@ -39,6 +38,18 @@ def campaign_runtime_skill_path(campaign_id: str) -> Path:
 
 def campaign_manifest_path(campaign_id: str) -> Path:
     return campaign_runtime_dir(campaign_id) / "manifest.json"
+
+
+def external_agent_config_path() -> Path:
+    return EXTERNAL_AGENT_ROOT / "config.json"
+
+
+def external_agent_prompt_path() -> Path:
+    return EXTERNAL_AGENT_ROOT / "CLAUDE.md"
+
+
+def external_agent_launch_path() -> Path:
+    return EXTERNAL_AGENT_ROOT / "launch.sh"
 
 
 def is_process_running(pid: int | None) -> bool:
@@ -76,20 +87,57 @@ def format_guideline_block(items: list[str], prefix: str) -> str:
     return "\n".join(f"- {prefix}{item}" for item in items)
 
 
+def product_slug_key(name: str) -> str:
+    return (
+        name.strip()
+        .lower()
+        .replace("&", "and")
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
+def build_referral_urls(campaign) -> dict[str, str]:
+    referral_urls: dict[str, str] = {}
+    for product in campaign.merchant.products:
+        if product.status != "active":
+            continue
+        referral_urls[product_slug_key(product.name)] = (
+            f"{settings.public_api_url}/go/{product.id}?src=agent&cid={campaign.id}"
+        )
+    return referral_urls
+
+
 def build_openclaw_config_payload(campaign, api_key: str) -> dict[str, Any]:
     config_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config"
     events_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/events"
+    referral_urls = build_referral_urls(campaign)
     return {
         "campaign_id": campaign.id,
         "config_endpoint": config_endpoint,
         "events_endpoint": events_endpoint,
         "api_key": api_key,
-        "generated_at": utcnow_iso(),
         "ever_api": {
+            "base_url": settings.public_api_url,
+            "campaign_id": campaign.id,
             "config_endpoint": config_endpoint,
             "events_endpoint": events_endpoint,
             "api_key": api_key,
         },
+        "reddit": {
+            "client_id": "PASTE_REDDIT_CLIENT_ID",
+            "client_secret": "PASTE_REDDIT_CLIENT_SECRET",
+            "username": settings.reddit_username or "PASTE_REDDIT_USERNAME",
+            "password": "PASTE_REDDIT_PASSWORD",
+        },
+        "email": {
+            "address": "PASTE_EMAIL_ADDRESS",
+            "password": "PASTE_EMAIL_APP_PASSWORD",
+            "smtp_host": "smtp.gmail.com",
+            "smtp_port": 587,
+        },
+        "referral_urls": referral_urls,
+        "generated_at": utcnow_iso(),
     }
 
 
@@ -97,146 +145,124 @@ def build_runtime_skill(campaign, api_key: str) -> str:
     brand_name = campaign.brand_voice_profile.get("brand_name") or campaign.merchant.name or "Brand"
     profile = campaign.brand_voice_profile
     context = campaign.brand_context_profile
-    seeded_context = context.get("additional_context", "")
-    competition = campaign.listener_config.get("competition", {}) if isinstance(campaign.listener_config, dict) else {}
     tone = profile.get("tone", "Helpful and confident")
     story = profile.get("story", "")
-    dos = profile.get("dos", [])
-    donts = profile.get("donts", [])
-    disclosure = f"I'm an AI agent for {brand_name} (via Ever)"
     events_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/events"
-    config_endpoint = f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config"
+    referral_urls = build_referral_urls(campaign)
     product_lines = []
     for product in campaign.merchant.products:
         if product.status != "active":
             continue
-        attributes = product.attributes if isinstance(product.attributes, dict) else {}
-        features = attributes.get("key_features", [])[:3]
         product_lines.append(
-            f"- {product.name} ({product.currency} {product.price:.2f}) | "
-            f"category={product.category or 'uncategorized'} | "
-            f"url={product.source_url or 'n/a'} | "
-            f"selling_points={', '.join(features) or 'premium quality'}"
+            f"- {product.name} ({product.currency} {product.price:.2f}) — "
+            f"{product.description or 'Use the product page and catalog for details.'}"
         )
     product_catalog = "\n".join(product_lines) or "- No active products configured."
-    budget = f"{campaign.budget_monthly:.2f}"
-    prompt = f"""# Ever Propose-Only Sales Agent
+    referral_block = "\n".join(
+        f"- {key}: {value}" for key, value in sorted(referral_urls.items())
+    ) or "- No referral URLs available yet."
+    prompt = f"""# {brand_name} Autonomous Sales Agent
 
-You are an objective-first autonomous sales agent for a DTC brand. Your only objective is to create more attributed revenue than compute cost.
+You are an autonomous sales agent for {brand_name}. Your single objective is to generate more revenue than you cost in compute.
 
 ## Your Identity
 - Brand: {brand_name}
-- Products:
+- Voice: {tone}
+- Story: {story or "Use the catalog, brand context, and observed internet behavior as your source of truth."}
+- Disclosure: You MUST always identify yourself as an AI agent for {brand_name} when communicating with any human.
+
+## Your Products
 {product_catalog}
-- Brand voice: {tone}
-- Brand story: {story or "Use the configured product truth and tone to guide every interaction."}
-- Referral tracking: Always start from product referral links in this form: {{referral_base}}?src={{source}}&cid={campaign.id}. Ever will attach proposal attribution automatically after the proposal is recorded.
+
+Store: https://{campaign.merchant.domain}
 
 ## Your Objective
-Generate as much revenue as possible for {brand_name} while staying within your compute budget of ${budget}/month. Optimize for the equation:
+Maximize:
 
-sales > compute_cost
+attributed_revenue - compute_cost
 
-Do not optimize for channel volume, post count, or vanity engagement. Optimize for real sales efficiency.
+You have a compute budget of ${campaign.budget_monthly:.2f}. Your job is to find ways to sell real products to real humans while keeping your compute cost below the value you generate.
 
-## Hard Boundaries
-1. Stay within the compute budget
-2. Stay grounded in real product truth
-3. Do not do anything illegal
-4. Use tracked links whenever a proposal points to a product
+## Your Tracked Links
+Use these tracked URLs whenever you recommend or link to a product:
+{referral_block}
 
-## Brand Do's
-{format_guideline_block(dos, "") or "- Stay useful and credible."}
+If you do not have a tracked link for a product yet, use the raw product URL and add ?ref=ever.
 
-## Brand Don'ts
-{format_guideline_block(donts, "Do not ") or "- Do not sound generic or pushy."}
+## Your Tools
+You have full access to:
+- A web browser
+- Reddit and other public communities
+- Email and DM style outreach when credentials are available
+- The file system
+- Shell commands if needed
 
-## Brand Context
-- Positioning: {context.get("positioning") or "Use the catalog and brand voice as your primary source of truth."}
-- Ideal customer: {context.get("ideal_customer") or "People with clear product fit and purchase intent."}
-
-### Key Messages
-{format_guideline_block(context.get("key_messages", []), "") or "- Keep the recommendation tightly grounded in product fit."}
-
-### Proof Points
-{format_guideline_block(context.get("proof_points", []), "") or "- Use only proof points already grounded in the brand and catalog."}
-
-### Objection Handling
-{format_guideline_block(context.get("objection_handling", []), "") or "- Handle objections honestly and do not force the sale."}
-
-### Prohibited Claims
-{format_guideline_block(context.get("prohibited_claims", []), "Do not ") or "- Do not make unsupported claims."}
-
-### Additional Context
-{context.get("additional_context") or "No extra context provided yet. Stay conservative when details are missing."}
-
-## Operating Mode
-- You are running an autonomous observe -> think -> act -> learn loop
-- You NEVER publish, send, DM, email, or post directly from this runtime
-- In this runtime, every outward action becomes a proposal for a human operator to execute
-- Think like an owner, not like a channel specialist
-- If a tactic seems unusual but promising, explore it
-- Do not freeze just because confidence is not perfect; learn through disciplined experimentation
+## Your Constraints
+1. Always disclose that you are an AI agent for {brand_name}
+2. Never make health or medical claims
+3. Never spam or blast identical messages
+4. Never disparage competitors
+5. Stay genuinely helpful first
+6. Respect platform rules
+7. Stay within the compute budget
+8. Do nothing illegal
 
 ## Your Freedom
-You decide:
-- Which channels and platforms to use
-- What tactics to employ
-- How to allocate your compute budget across activities
-- When to engage and when to wait
-- What to say and how to say it
-- Whether to respond to existing conversations, create new content, do direct outreach, change owned messaging, target creators, pursue partnerships, or invent a better move
+Everything else is up to you. You decide the platform, tactic, format, angle, timing, and experiments.
 
-## Tool Use
-- Use the available public-web tools to search, inspect, and discover
-- Choose your own investigations; do not wait for a fixed playbook
-- Turn the best findings into concrete, executable proposals
-
-## Seeded Operator Context
-- Treat uploaded files, voice notes, and direct operator context as high-priority input when it sharpens fit or claims
-- Current seeded context: {seeded_context or "No extra seeded context stored in the brand profile yet. Re-fetch config to get fresh uploaded context items."}
-
-## Memory
-- Re-fetch your config regularly and treat the memory section as real operating memory
-- Learn from operator approvals, rejections, executions, and outcomes
-- Prefer tactics and framings that memory says were efficient
-- Avoid repeating patterns that memory marks as weak, rejected, or low-conviction
-
-## Model Competition
-- Competition enabled: {bool(competition.get('enabled', False))}
-- Competition mode: {competition.get('mode', 'single_lane')}
-- If multiple model lanes are active, each lane should independently chase the same objective
-- The winning proposals are whichever ideas look most likely to keep sales above compute cost
+## Brand Context
+- Positioning: {context.get("positioning") or "No extra positioning provided yet."}
+- Ideal customer: {context.get("ideal_customer") or "People with strong fit to the product catalog."}
+- Key messages:
+{format_guideline_block(context.get("key_messages", []), "") or "- Use real product fit and product truth."}
+- Proof points:
+{format_guideline_block(context.get("proof_points", []), "") or "- Use grounded product truth only."}
+- Objection handling:
+{format_guideline_block(context.get("objection_handling", []), "") or "- Answer objections honestly and directly."}
+- Prohibited claims:
+{format_guideline_block(context.get("prohibited_claims", []), "Do not ") or "- Do not invent unsupported claims."}
+- Additional context:
+{context.get("additional_context") or "No additional operator context has been added yet."}
 
 ## Reporting
-After every opportunity you decide is worth operator time, report it as a proposal:
+After every action, report it to Ever:
 
 POST {events_endpoint}
 Authorization: Bearer {api_key}
 
-Use event_type="proposal". Include:
+Use event_type="action" for real actions and event_type="strategy_update" for learning summaries. If you are not ready to act yet, you may still report a proposal via event_type="proposal" so the operator can execute it.
+
+Every report should include:
+- category
 - surface
+- description
 - source_url
-- source_content
-- source_context
-- intent_score
-- action_type
-- proposed_response
-- rationale
-- referral_url
-- execution_instructions
-- product_id
+- response_text when relevant
+- referral_url when relevant
+- product_id when relevant
 - tokens_used
 - compute_cost_usd
 - timestamp
 
 If the response includes budget_exhausted: true, stop all activity.
 
-## Strategy Reporting
-Every 24 hours, send a strategy_update describing what you tried, what worked, what did not, and what you plan to do next.
+## Your Memory
+Keep learning notes in memory.md. After every action, write:
+- What you did
+- What happened
+- What you learned
+- What to try next
 
-## Config Refresh
-Re-fetch your config from {config_endpoint} every 30 minutes. If campaign status is "pending_payment", "paused_manual", "paused_budget", "canceled", or "stopped", halt all activity.
+Read memory.md at the start of every session.
+
+## Suggested Starting Points
+- Browse communities where people actively ask for workout underwear recommendations
+- Find creators, editors, and communities where a Bia product genuinely fits
+- Reach out directly when the fit is strong
+- Create content if owned content has a better expected return than reply-based outreach
+- Try unusual tactics if they appear efficient
+
+Go.
 """
     return prompt.strip() + "\n"
 
@@ -276,21 +302,13 @@ def launch_openclaw_agent(campaign, api_key: str) -> dict[str, Any]:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     log_path = runtime_dir / "agent.log"
     manifest = read_manifest(campaign.id)
-    existing_pid = manifest.get("pid")
-    if is_process_running(existing_pid):
+    if manifest.get("status") in {"running", "external-ready"}:
         return manifest
 
     runtime_files = write_openclaw_runtime_files(campaign, api_key)
     config_path = runtime_files["config_path"]
     skill_path = runtime_files["skill_path"]
-
-    launch_command = [
-        sys.executable,
-        "-m",
-        "app.openclaw_agent",
-        "--config-path",
-        config_path,
-    ]
+    launch_command = f"cd {EXTERNAL_AGENT_ROOT} && bash launch.sh"
 
     if os.environ.get("PYTEST_CURRENT_TEST"):
         manifest = {
@@ -301,30 +319,20 @@ def launch_openclaw_agent(campaign, api_key: str) -> dict[str, Any]:
             "config_path": config_path,
             "skill_path": skill_path,
             "log_path": str(log_path),
-            "launch_command": " ".join(launch_command),
+            "launch_command": launch_command,
         }
         write_manifest(campaign.id, manifest)
         return manifest
 
-    with log_path.open("ab") as log_file:
-        process = subprocess.Popen(  # noqa: S603
-            launch_command,
-            cwd=str(BASE_DIR),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
     manifest = {
         "campaign_id": campaign.id,
-        "status": "running",
-        "pid": process.pid,
+        "status": "external-ready",
+        "pid": None,
         "started_at": utcnow_iso(),
         "config_path": config_path,
         "skill_path": skill_path,
         "log_path": str(log_path),
-        "launch_command": " ".join(launch_command),
+        "launch_command": launch_command,
     }
     write_manifest(campaign.id, manifest)
     return manifest

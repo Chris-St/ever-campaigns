@@ -261,6 +261,7 @@ def test_full_flow(monkeypatch) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["status"] == "test-mode"
     assert manifest["config_path"] == str(runtime_config_path)
+    assert manifest["launch_command"].endswith("agent && bash launch.sh")
     runtime_config = json.loads(runtime_config_path.read_text(encoding="utf-8"))
     assert runtime_config["api_key"] == agent_api_key
 
@@ -268,11 +269,10 @@ def test_full_flow(monkeypatch) -> None:
     assert openclaw_skill.status_code == 200
     assert openclaw_skill.headers["content-type"].startswith("text/markdown")
     openclaw_skill_text = openclaw_skill.text
-    assert "Ever Propose-Only Sales Agent" in openclaw_skill_text
-    assert "/agent-config" in openclaw_skill_text
-    assert "You NEVER publish" in openclaw_skill_text
+    assert "Autonomous Sales Agent" in openclaw_skill_text
+    assert "/events" in openclaw_skill_text
+    assert "You have full access to" in openclaw_skill_text
     assert "Made in Canada" in openclaw_skill_text
-    assert "Reddit-Specific Rules" not in openclaw_skill_text
 
     openclaw_skill_bundle = client.get(
         f"/api/campaigns/{campaign_id}/openclaw-skill?format=bundle",
@@ -283,7 +283,8 @@ def test_full_flow(monkeypatch) -> None:
     assert openclaw_skill_json["campaign_id"] == campaign_id
     assert openclaw_skill_json["config_json"]["api_key"] == agent_api_key
     assert openclaw_skill_json["config_json"]["ever_api"]["api_key"] == agent_api_key
-    assert "reddit" not in openclaw_skill_json["config_json"]
+    assert openclaw_skill_json["config_json"]["reddit"]["username"] == "EverAgentBia"
+    assert "recovery_shorts" in openclaw_skill_json["config_json"]["referral_urls"]
 
     openclaw_config = client.get(
         f"/api/campaigns/{campaign_id}/openclaw-skill?format=config",
@@ -293,6 +294,7 @@ def test_full_flow(monkeypatch) -> None:
     openclaw_config_json = openclaw_config.json()
     assert openclaw_config_json["ever_api"]["config_endpoint"].endswith("/agent-config")
     assert openclaw_config_json["ever_api"]["events_endpoint"].endswith("/events")
+    assert openclaw_config_json["referral_urls"]["recovery_shorts"].endswith(f"cid={campaign_id}")
 
     agent_headers = {"Authorization": f"Bearer {agent_api_key}"}
     agent_config = client.get(
@@ -439,6 +441,7 @@ def test_full_flow(monkeypatch) -> None:
         follow_redirects=False,
     )
     assert redirect.status_code in {302, 307}
+    assert "biaundies.com/products/" in redirect.headers["location"]
 
     conversion = client.post(
         "/webhooks/shopify/order",
@@ -542,6 +545,7 @@ def test_full_flow(monkeypatch) -> None:
     assert endpoints_json["openclaw"]["api_key_preview"].endswith(
         regenerated_key_json["api_key"][-4:]
     )
+    assert endpoints_json["openclaw"]["launch_command"].endswith("agent/launch.sh")
 
     products = client.get(f"/campaigns/{campaign_id}/products", headers=headers)
     assert products.status_code == 200

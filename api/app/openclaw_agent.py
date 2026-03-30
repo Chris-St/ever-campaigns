@@ -2249,6 +2249,12 @@ def maybe_emit_strategy_update(
 
 
 def main() -> int:
+    if settings.openclaw_agent_mode != "legacy_internal":
+        sys.stderr.write(
+            "Internal openclaw_agent loop is disabled. Use the repo-root agent/ OpenClaw project instead.\n"
+        )
+        return 0
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-path")
     parser.add_argument("--campaign-id")

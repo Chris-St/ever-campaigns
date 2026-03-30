@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import BASE_DIR, settings
 from app.models.entities import Merchant
-from app.services.openclaw_runtime import campaign_runtime_config_path, campaign_runtime_skill_path
+from app.services.openclaw_runtime import (
+    external_agent_config_path,
+    external_agent_launch_path,
+    external_agent_prompt_path,
+)
 
 
 def slugify_merchant(name: str | None, domain: str) -> str:
@@ -85,7 +89,7 @@ def build_agent_endpoints(campaign, api_key_plaintext: str | None = None) -> dic
             "label": campaign.listener_status.replace("_", " ").title(),
             "badge": "Running" if campaign.listener_status == "running" else "Ready",
             "description": (
-                "Use this API key and config endpoint to run a propose-only OpenClaw agent that finds opportunities, drafts tracked actions, and sends them into Ever's operator queue."
+                "Run the standalone OpenClaw agent from the repo-root agent/ project. It operates independently and reports actions back to Ever over HTTP."
             ),
             "config_url": f"{settings.public_api_url}/api/campaigns/{campaign.id}/agent-config",
             "events_url": f"{settings.public_api_url}/api/campaigns/{campaign.id}/events",
@@ -94,13 +98,9 @@ def build_agent_endpoints(campaign, api_key_plaintext: str | None = None) -> dic
             "bundle_download_url": f"{settings.public_api_url}/api/campaigns/{campaign.id}/openclaw-skill?format=bundle",
             "api_key": api_key_plaintext,
             "api_key_preview": preview_key,
-            "skill_path": str(campaign_runtime_skill_path(campaign.id)),
-            "config_path": str(campaign_runtime_config_path(campaign.id)),
-            "launch_command": (
-                f"cd {BASE_DIR} && "
-                f"python3.10 -m app.openclaw_agent --config-path "
-                f"{campaign_runtime_config_path(campaign.id)}"
-            ),
+            "skill_path": str(external_agent_prompt_path()),
+            "config_path": str(external_agent_config_path()),
+            "launch_command": f"cd {BASE_DIR.parent / 'agent'} && bash {external_agent_launch_path()}",
         },
         "acp": {
             "status": "pending",
